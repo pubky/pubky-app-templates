@@ -13,6 +13,6 @@
     "vite": "^8.1.0"
   },
   "dependencies": {
-    "@synonymdev/pubky": "^0.10.0-alpha.0"
+    "@synonymdev/pubky": "^0.9.3"
   }
 }
