@@ -7,6 +7,6 @@ updates:
     groups:
       pubky-stack:
         patterns:
-          - "@synonymdev/pubky"
-          - "@synonymdev/pubky-*"
-          - "@synonymdev/*pubky*"
+          - '@synonymdev/pubky'
+          - '@synonymdev/pubky-*'
+          - '@synonymdev/*pubky*'

@@ -1,5 +1,21 @@
 version: 2
 updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - '*'
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      repo-tools:
+        patterns:
+          - '*'
   - package-ecosystem: npm
     directory: /basic-pubky-app
     schedule:
@@ -7,6 +23,16 @@ updates:
     groups:
       pubky-stack:
         patterns:
-          - "@synonymdev/pubky"
-          - "@synonymdev/pubky-*"
-          - "@synonymdev/*pubky*"
+          - '@synonymdev/pubky'
+          - '@synonymdev/pubky-*'
+          - '@synonymdev/*pubky*'
+  - package-ecosystem: npm
+    directory: /vite-starter
+    schedule:
+      interval: weekly
+    groups:
+      pubky-stack:
+        patterns:
+          - '@synonymdev/pubky'
+          - '@synonymdev/pubky-*'
+          - '@synonymdev/*pubky*'

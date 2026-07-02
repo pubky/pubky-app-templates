@@ -1,0 +1,12 @@
+:root {
+  color: #17202a;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+#app {
+  padding: 2rem;
+}

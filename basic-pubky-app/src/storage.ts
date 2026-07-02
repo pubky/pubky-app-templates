@@ -83,9 +83,5 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isNotFound(error: unknown) {
-  return (
-    isRecord(error) &&
-    isRecord(error.data) &&
-    error.data.statusCode === 404
-  )
+  return isRecord(error) && isRecord(error.data) && error.data.statusCode === 404
 }

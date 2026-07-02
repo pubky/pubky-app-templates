@@ -1,0 +1,24 @@
+{
+  "name": "pubky-app-templates",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "audit": "npm audit --audit-level=moderate",
+    "check": "npm run format:check && npm run lint",
+    "format": "prettier \"**/*.{js,ts,json,yml,yaml,md,html}\" --write",
+    "format:check": "prettier \"**/*.{js,ts,json,yml,yaml,md,html}\" --check",
+    "lint": "npm run lint:code && npm run lint:actions",
+    "lint:actions": "github-actionlint .github/workflows/*.yml",
+    "lint:code": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.6.0",
+    "github-actionlint": "^1.7.12",
+    "globals": "^17.7.0",
+    "prettier": "^3.9.4",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.62.1"
+  }
+}
