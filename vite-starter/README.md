@@ -1,8 +1,8 @@
 # Vite Starter
 
-A minimal Vite + TypeScript starter for the Pubky tutorial.
+A plain Vite + TypeScript starter for the Pubky tutorial.
 
-It includes `@synonymdev/pubky@0.9.3`, but no Pubky app code yet.
+It does not include the Pubky SDK or any Pubky app code. The tutorial adds those pieces manually.
 
 ## Quick Start
 

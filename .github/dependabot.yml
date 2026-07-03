@@ -31,8 +31,6 @@ updates:
     schedule:
       interval: weekly
     groups:
-      pubky-stack:
+      vite-starter:
         patterns:
-          - '@synonymdev/pubky'
-          - '@synonymdev/pubky-*'
-          - '@synonymdev/*pubky*'
+          - '*'
