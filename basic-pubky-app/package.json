@@ -11,7 +11,7 @@
   },
   "devDependencies": {
     "typescript": "~6.0.2",
-    "vite": "^8.1.0"
+    "vite": "^8.1.3"
   },
   "dependencies": {
     "@synonymdev/pubky": "^0.9.3"
