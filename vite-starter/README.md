@@ -12,7 +12,3 @@ cd my-pubky-app
 npm install
 npm run dev
 ```
-
-## Next
-
-Open `src/main.ts` and replace the placeholder code with the tutorial snippets.
