@@ -22,7 +22,7 @@ export async function listRecords(session: Session) {
   const records = await Promise.all(
     urls
       .filter((url) => url.endsWith('.json'))
-      .map(async (url) => readRecord(session, PubkyResource.parse(url).path as Path)),
+      .map((url) => readRecord(session, PubkyResource.parse(url).path as Path)),
   )
 
   return records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))

@@ -1,22 +1,17 @@
-import type { AuthFlow, Session } from '@synonymdev/pubky'
+import type { Session } from '@synonymdev/pubky'
 import './style.css'
 import {
-  APP_CAPABILITIES,
   APP_PATH,
   TESTNET_HOMESERVER,
-  clearPendingSigninFlow,
   createUser,
   restoreSavedSession,
-  resumePendingSigninFlow,
   saveSession,
   signOut,
-  startSigninFlow,
 } from './pubky'
 import { startAppEventStream, type AppStreamEvent } from './events'
 import { deleteRecord, listRecords, saveRecord, type AppRecord } from './storage'
 
 interface State {
-  authUrl?: string
   busy?: string
   editingId?: string
   error?: string
@@ -47,11 +42,7 @@ async function init() {
     const session = await restoreSavedSession()
     if (session) {
       await activateSession(session, 'Session restored.')
-      return
     }
-
-    const flow = resumePendingSigninFlow()
-    if (flow) void waitForApproval(flow)
   })
 }
 
@@ -94,25 +85,19 @@ function authView() {
     <section class="auth-grid">
       <section class="panel">
         <div>
-          <h2>Sign in</h2>
-          <p class="muted">${escapeHtml(APP_CAPABILITIES)}</p>
+          <h2>Sign in with Pubky Ring</h2>
+          <p class="muted">Coming soon.</p>
         </div>
-        <button id="sign-in" type="button" ${disabledAttr()}>Start sign in</button>
-        ${
-          state.authUrl
-            ? `
-              <div class="auth-url">
-                <a href="${escapeHtml(state.authUrl)}">Open signer</a>
-                <button id="copy-auth-url" type="button">Copy URL</button>
-                <textarea readonly rows="4">${escapeHtml(state.authUrl)}</textarea>
-              </div>
-            `
-            : ''
-        }
       </section>
 
       <section class="panel">
-        <h2>Create user</h2>
+        <div>
+          <h2>New identity</h2>
+          <p class="muted">
+            Create a new key pair, sign up and sign in on the homeserver, in one go.
+            Primarily for development, to move through auth quickly.
+          </p>
+        </div>
         <form id="create-user-form" class="record-form">
           <label>
             Homeserver public key
@@ -123,7 +108,7 @@ function authView() {
               required
             />
           </label>
-          <button type="submit" ${disabledAttr()}>Create user and sign in</button>
+          <button type="submit" ${disabledAttr()}>Create identity and sign in</button>
         </form>
       </section>
     </section>
@@ -136,7 +121,7 @@ function appView() {
       <section class="panel">
         <div class="section-header">
           <div>
-            <h2>Records</h2>
+            <h2>Editor</h2>
             <p class="muted">${escapeHtml(APP_PATH)}</p>
           </div>
           <button id="new-record" type="button">New</button>
@@ -145,7 +130,12 @@ function appView() {
       </section>
 
       <section class="panel">
-        <h2>Saved records</h2>
+        <div class="section-header">
+          <div>
+            <h2>Records</h2>
+            <p class="muted">${escapeHtml(APP_PATH)}</p>
+          </div>
+        </div>
         ${recordsList()}
       </section>
 
@@ -233,15 +223,6 @@ function streamEventsList() {
 }
 
 function bindEvents() {
-  document.querySelector('#sign-in')?.addEventListener('click', () => {
-    void waitForApproval(startSigninFlow())
-  })
-
-  document.querySelector('#copy-auth-url')?.addEventListener('click', () => {
-    if (!state.authUrl) return
-    void navigator.clipboard.writeText(state.authUrl)
-  })
-
   document.querySelector('#create-user-form')?.addEventListener('submit', (event) => {
     event.preventDefault()
     void handleCreateUser(event.currentTarget as HTMLFormElement)
@@ -279,28 +260,14 @@ function bindEvents() {
   })
 }
 
-async function waitForApproval(flow: AuthFlow) {
-  state.authUrl = flow.authorizationUrl
-  state.notice = 'Waiting for signer approval.'
-  render()
-
-  await run('Waiting for signer approval...', async () => {
-    const session = await flow.awaitApproval()
-    await saveSession(session)
-    clearPendingSigninFlow()
-    state.authUrl = undefined
-    await activateSession(session, 'Signed in.')
-  })
-}
-
 async function handleCreateUser(form: HTMLFormElement) {
   const formData = new FormData(form)
   const homeserver = formValue(formData, 'homeserver')
 
-  await run('Creating user...', async () => {
+  await run('Creating identity...', async () => {
     const session = await createUser(homeserver)
     await saveSession(session)
-    await activateSession(session, 'User created and signed in.')
+    await activateSession(session, 'Identity created and signed in.')
   })
 }
 

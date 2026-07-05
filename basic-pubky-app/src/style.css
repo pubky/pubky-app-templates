@@ -6,7 +6,6 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; }
-a { color: #175cd3; }
 h1, h2, p { margin-top: 0; }
 h1 { margin-bottom: 0; font-size: 2rem; }
 h2 { font-size: 1.1rem; }
@@ -45,7 +44,6 @@ textarea { resize: vertical; }
 .status.error { border-color: #fecdca; color: #b42318; }
 
 .app-header,
-.user-block,
 .section-header,
 .record-list li,
 .actions {
@@ -62,11 +60,10 @@ textarea { resize: vertical; }
 
 .app-header { align-items: flex-start; margin-bottom: 0.75rem; }
 .section-header { margin-bottom: 1rem; }
-.pubky-id { margin: 0 0 0.25rem; overflow-wrap: anywhere; font-family: monospace; }
+.pubky-id { margin: 0; overflow-wrap: anywhere; font-family: monospace; }
 
 .auth-grid,
 .grid,
-.auth-url,
 .record-form,
 .record-list,
 .event-list {
@@ -113,6 +110,7 @@ textarea { resize: vertical; }
 
 .user-block {
   display: grid;
+  gap: 0.5rem;
   justify-items: end;
   max-width: 50%;
   text-align: right;
