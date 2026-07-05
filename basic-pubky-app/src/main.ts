@@ -9,13 +9,14 @@ import {
   signOut,
 } from './pubky'
 import { startAppEventStream, type AppStreamEvent } from './events'
-import { deleteRecord, listRecords, saveRecord, type AppRecord } from './storage'
+import { deleteRecord, listRecords, recordPath, saveRecord, type AppRecord } from './storage'
 
 interface State {
   busy?: string
   editingId?: string
   error?: string
   notice?: string
+  noticePath?: string
   records: AppRecord[]
   session?: Session
   stopStream?: () => Promise<void>
@@ -76,7 +77,7 @@ function signedInHeader(session: Session) {
 function statusView() {
   if (state.busy) return `<p class="status">${escapeHtml(state.busy)}</p>`
   if (state.error) return `<p class="status error">${escapeHtml(state.error)}</p>`
-  if (state.notice) return `<p class="status">${escapeHtml(state.notice)}</p>`
+  if (state.notice) return `<p class="status">${statusMessage(state.notice, state.noticePath)}</p>`
   return ''
 }
 
@@ -120,22 +121,14 @@ function appView() {
     <section class="grid">
       <section class="panel">
         <div class="section-header">
-          <div>
-            <h2>Editor</h2>
-            <p class="muted">${escapeHtml(APP_PATH)}</p>
-          </div>
+          <h2>Editor</h2>
           <button id="new-record" type="button">New</button>
         </div>
         ${recordForm()}
       </section>
 
       <section class="panel">
-        <div class="section-header">
-          <div>
-            <h2>Records</h2>
-            <p class="muted">${escapeHtml(APP_PATH)}</p>
-          </div>
-        </div>
+        <h2>Records</h2>
         ${recordsList()}
       </section>
 
@@ -284,7 +277,7 @@ async function handleSaveRecord(form: HTMLFormElement) {
       body,
     })
     state.editingId = state.editingId ? record.id : undefined
-    state.notice = 'Record saved.'
+    setNotice('Record saved:', recordPath(record.id))
     await refreshRecords()
   })
 }
@@ -296,7 +289,7 @@ async function handleDeleteRecord(id: string | undefined) {
   await run('Deleting record...', async () => {
     await deleteRecord(session, id)
     if (state.editingId === id) state.editingId = undefined
-    state.notice = 'Record deleted.'
+    setNotice('Record deleted:', recordPath(id))
     await refreshRecords()
   })
 }
@@ -311,7 +304,7 @@ async function handleSignOut() {
     state.records = []
     state.editingId = undefined
     state.streamEvents = []
-    state.notice = 'Signed out.'
+    setNotice('Signed out.')
   })
 }
 
@@ -319,7 +312,7 @@ async function toggleStream() {
   if (state.stopStream) {
     await run('Stopping stream...', async () => {
       await stopStream()
-      state.notice = 'Stream stopped.'
+      setNotice('Stream stopped.')
     })
     return
   }
@@ -338,7 +331,7 @@ async function toggleStream() {
         render()
       },
     )
-    state.notice = 'Stream started.'
+    setNotice('Stream started.')
   })
 }
 
@@ -357,8 +350,13 @@ async function refreshRecords() {
 
 async function activateSession(session: Session, notice: string) {
   state.session = session
-  state.notice = notice
+  setNotice(notice)
   await refreshRecords()
+}
+
+function setNotice(notice: string, path?: string) {
+  state.notice = notice
+  state.noticePath = path
 }
 
 async function run(label: string, task: () => Promise<void>) {
@@ -403,6 +401,12 @@ function formatDate(value: string) {
 function formatError(error: unknown) {
   if (error instanceof Error) return error.message
   return String(error)
+}
+
+function statusMessage(message: string, path: string | undefined) {
+  const escapedMessage = escapeHtml(message)
+  if (!path) return escapedMessage
+  return `${escapedMessage} <em>${escapeHtml(path)}</em>`
 }
 
 const htmlEscapes: Record<string, string> = {

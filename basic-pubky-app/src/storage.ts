@@ -54,7 +54,7 @@ export async function deleteRecord(session: Session, id: string) {
   await session.storage.delete(recordPath(id))
 }
 
-function recordPath(id: string) {
+export function recordPath(id: string) {
   return `${RECORDS_DIR}${id}.json` as Path
 }
 
