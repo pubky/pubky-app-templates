@@ -6,7 +6,7 @@ It uses `@synonymdev/pubky@0.9.3` and keeps the app code small on purpose.
 
 ## What's Included
 
-- A Pubky Ring sign-in placeholder.
+- Pubky Ring sign-in with a QR code, magic link button and copy-to-clipboard action.
 - A new identity helper that creates a key pair, then signs up and signs in on a homeserver in one go.
 - Session restore and sign out.
 - Simple CRUD helpers under the app path.
@@ -18,7 +18,7 @@ It uses `@synonymdev/pubky@0.9.3` and keeps the app code small on purpose.
 - Full recovery or seed management.
 - Homeserver admin tools.
 - An aggregator or indexer. This basic app talks directly to the user's homeserver as its data layer; add an aggregator for multi-homeserver access or an indexer for backend-like querying.
-- A production signup or Pubky Ring sign-in flow.
+- A production signup flow.
 - A UI framework.
 
 ## Quick Start
@@ -30,7 +30,7 @@ npm install
 npm run dev
 ```
 
-Use **New identity** to create a key pair, sign up and sign in on the configured homeserver, in one go. Primarily for development, to move through auth quickly.
+Use **Sign in with Pubky Ring** to approve the app session from Ring. Use **New identity** to create a key pair, sign up and sign in on the configured homeserver, in one go. The new identity helper is primarily for development, to move through auth quickly.
 
 ## Local Testnet
 
@@ -57,6 +57,7 @@ Optional environment variables:
 
 ```bash
 VITE_PUBKY_TESTNET_HOST=localhost
+VITE_PUBKY_HTTP_RELAY=https://httprelay.pubky.app/inbox/
 ```
 
 ## App Settings

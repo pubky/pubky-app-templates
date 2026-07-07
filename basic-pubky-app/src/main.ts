@@ -1,15 +1,21 @@
 import type { Session } from '@synonymdev/pubky'
+import { toCanvas } from 'qrcode'
 import './style.css'
 import {
   APP_PATH,
   TESTNET_HOMESERVER,
   createUser,
+  isRingAuthCanceled,
   restoreSavedSession,
   saveSession,
   signOut,
+  startRingLogin,
+  type RingLoginFlow,
 } from './pubky'
 import { startAppEventStream, type AppStreamEvent } from './events'
 import { deleteRecord, listRecords, recordPath, saveRecord, type AppRecord } from './storage'
+
+const RING_QR_SIZE = 220
 
 interface State {
   busy?: string
@@ -18,15 +24,26 @@ interface State {
   notice?: string
   noticePath?: string
   records: AppRecord[]
+  ringAuthFlow?: RingLoginFlow
+  ringLogin: RingLoginState
   session?: Session
   stopStream?: () => Promise<void>
   streamEvents: AppStreamEvent[]
+}
+
+interface RingLoginState {
+  authorizationUrl?: string
+  copied?: boolean
+  expired?: boolean
+  loading?: boolean
+  token?: symbol
 }
 
 const app = getAppElement()
 
 const state: State = {
   records: [],
+  ringLogin: {},
   streamEvents: [],
 }
 
@@ -45,6 +62,8 @@ async function init() {
       await activateSession(session, 'Session restored.')
     }
   })
+
+  if (!state.session) await refreshRingLogin()
 }
 
 function render() {
@@ -63,6 +82,7 @@ function render() {
   `
 
   bindEvents()
+  void renderRingLoginQr()
 }
 
 function signedInHeader(session: Session) {
@@ -84,12 +104,7 @@ function statusView() {
 function authView() {
   return `
     <section class="auth-grid">
-      <section class="panel">
-        <div>
-          <h2>Sign in with Pubky Ring</h2>
-          <p class="muted">Coming soon.</p>
-        </div>
-      </section>
+      ${ringLoginPanel()}
 
       <section class="panel">
         <div>
@@ -113,6 +128,75 @@ function authView() {
         </form>
       </section>
     </section>
+  `
+}
+
+function ringLoginPanel() {
+  const authUrl = state.ringLogin.authorizationUrl
+  const canUseAuthUrl = Boolean(authUrl) && !state.ringLogin.loading && !state.ringLogin.expired
+
+  return `
+    <section class="panel ring-login-panel">
+      <div class="section-header">
+        <h2>Sign in with Pubky Ring</h2>
+        <button id="refresh-ring-login" type="button" ${refreshRingDisabledAttr()}>
+          ${state.ringLogin.expired ? 'New link' : 'Refresh'}
+        </button>
+      </div>
+      <div class="ring-login">
+        <div class="qr-frame">
+          ${ringQrSlot()}
+        </div>
+        <div class="ring-actions">
+          ${
+            canUseAuthUrl
+              ? `<a id="open-ring-link" class="button-link primary" href="${escapeHtml(authUrl)}">Authorize with Pubky Ring</a>`
+              : `<button type="button" disabled>Authorize with Pubky Ring</button>`
+          }
+          <button id="copy-ring-link" type="button" ${ringLinkDisabledAttr()}>
+            ${state.ringLogin.copied ? 'Copied' : 'Copy link'}
+          </button>
+        </div>
+      </div>
+    </section>
+  `
+}
+
+function ringQrSlot() {
+  if (state.ringLogin.loading) {
+    return `
+      <div class="qr-placeholder" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Generating link...</span>
+      </div>
+    `
+  }
+
+  if (state.ringLogin.expired) {
+    return `
+      <div class="qr-placeholder" aria-live="polite">
+        <strong>Link expired</strong>
+        <span>Generate a fresh one.</span>
+      </div>
+    `
+  }
+
+  if (!state.ringLogin.authorizationUrl) {
+    return `
+      <div class="qr-placeholder" aria-live="polite">
+        <span>Waiting for Ring link...</span>
+      </div>
+    `
+  }
+
+  return `
+    <canvas
+      id="ring-login-qr"
+      class="ring-qr"
+      width="${RING_QR_SIZE}"
+      height="${RING_QR_SIZE}"
+      aria-label="Pubky Ring sign-in QR code"
+    ></canvas>
   `
 }
 
@@ -216,6 +300,14 @@ function streamEventsList() {
 }
 
 function bindEvents() {
+  document.querySelector('#refresh-ring-login')?.addEventListener('click', () => {
+    void refreshRingLogin()
+  })
+
+  document.querySelector('#copy-ring-link')?.addEventListener('click', () => {
+    void handleCopyRingLink()
+  })
+
   document.querySelector('#create-user-form')?.addEventListener('submit', (event) => {
     event.preventDefault()
     void handleCreateUser(event.currentTarget as HTMLFormElement)
@@ -251,6 +343,93 @@ function bindEvents() {
   document.querySelector('#toggle-stream')?.addEventListener('click', () => {
     void toggleStream()
   })
+}
+
+async function refreshRingLogin() {
+  const token = Symbol('ring-login')
+  cancelRingLogin()
+
+  state.ringLogin = {
+    loading: true,
+    token,
+  }
+  state.error = undefined
+  render()
+
+  try {
+    const flow = startRingLogin()
+    state.ringAuthFlow = flow
+
+    if (!isActiveRingLogin(token)) {
+      flow.cancel()
+      return
+    }
+
+    state.ringLogin = {
+      authorizationUrl: flow.authorizationUrl,
+      token,
+    }
+    render()
+
+    void handleRingApproval(flow, token)
+  } catch (error) {
+    if (!isActiveRingLogin(token)) return
+
+    state.ringAuthFlow = undefined
+    state.ringLogin = {}
+    state.error = formatError(error)
+    render()
+  }
+}
+
+async function handleRingApproval(flow: RingLoginFlow, token: symbol) {
+  try {
+    const session = await flow.awaitApproval
+    if (!isActiveRingLogin(token)) return
+
+    state.ringAuthFlow = undefined
+    await run('Completing Pubky Ring sign-in...', async () => {
+      await saveSession(session)
+      await activateSession(session, 'Signed in with Pubky Ring.')
+    })
+  } catch (error) {
+    if (isRingAuthCanceled(error) || !isActiveRingLogin(token)) return
+
+    state.ringAuthFlow = undefined
+    state.ringLogin = {
+      expired: true,
+      token,
+    }
+    state.error = formatError(error)
+    render()
+  }
+}
+
+async function handleCopyRingLink() {
+  const authUrl = state.ringLogin.authorizationUrl
+  if (!authUrl || state.ringLogin.expired) return
+
+  try {
+    await copyTextToClipboard(authUrl)
+    state.ringLogin = {
+      ...state.ringLogin,
+      copied: true,
+    }
+    setNotice('Pubky Ring link copied.')
+    render()
+
+    window.setTimeout(() => {
+      if (state.ringLogin.authorizationUrl !== authUrl) return
+      state.ringLogin = {
+        ...state.ringLogin,
+        copied: false,
+      }
+      render()
+    }, 2200)
+  } catch (error) {
+    state.error = formatError(error)
+    render()
+  }
 }
 
 async function handleCreateUser(form: HTMLFormElement) {
@@ -306,6 +485,8 @@ async function handleSignOut() {
     state.streamEvents = []
     setNotice('Signed out.')
   })
+
+  if (!state.session) await refreshRingLogin()
 }
 
 async function toggleStream() {
@@ -348,10 +529,42 @@ async function refreshRecords() {
   state.records = await listRecords(session)
 }
 
+async function renderRingLoginQr() {
+  const canvas = document.querySelector<HTMLCanvasElement>('#ring-login-qr')
+  const authUrl = state.ringLogin.authorizationUrl
+  if (!canvas || !authUrl || state.ringLogin.expired) return
+
+  try {
+    await toCanvas(canvas, authUrl, {
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      width: RING_QR_SIZE,
+      color: {
+        dark: '#101828',
+        light: '#ffffff',
+      },
+    })
+  } catch (error) {
+    console.error('Failed to render Pubky Ring QR code', error)
+  }
+}
+
 async function activateSession(session: Session, notice: string) {
+  cancelRingLogin()
+  state.ringLogin = {}
   state.session = session
   setNotice(notice)
   await refreshRecords()
+}
+
+function cancelRingLogin() {
+  const flow = state.ringAuthFlow
+  state.ringAuthFlow = undefined
+  flow?.cancel()
+}
+
+function isActiveRingLogin(token: symbol) {
+  return state.ringLogin.token === token
 }
 
 function setNotice(notice: string, path?: string) {
@@ -389,8 +602,41 @@ function disabledAttr() {
   return state.busy ? 'disabled' : ''
 }
 
+function ringLinkDisabledAttr() {
+  return state.busy || state.ringLogin.loading || state.ringLogin.expired || !state.ringLogin.authorizationUrl
+    ? 'disabled'
+    : ''
+}
+
+function refreshRingDisabledAttr() {
+  return state.busy || state.ringLogin.loading ? 'disabled' : ''
+}
+
 function formValue(formData: FormData, name: string) {
   return String(formData.get(name) || '')
+}
+
+async function copyTextToClipboard(value: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+
+  const textArea = document.createElement('textarea')
+  textArea.value = value
+  textArea.setAttribute('readonly', '')
+  textArea.style.position = 'fixed'
+  textArea.style.opacity = '0'
+  document.body.append(textArea)
+  textArea.select()
+
+  try {
+    if (!document.execCommand('copy')) {
+      throw new Error('Clipboard copy failed')
+    }
+  } finally {
+    textArea.remove()
+  }
 }
 
 function formatDate(value: string) {
