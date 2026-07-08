@@ -50,6 +50,7 @@ jobs:
       matrix:
         template:
           - basic-pubky-app
+          - pubky-signer-app
           - vite-starter
 
     steps:

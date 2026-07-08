@@ -27,6 +27,16 @@ updates:
           - '@synonymdev/pubky-*'
           - '@synonymdev/*pubky*'
   - package-ecosystem: npm
+    directory: /pubky-signer-app
+    schedule:
+      interval: weekly
+    groups:
+      pubky-stack:
+        patterns:
+          - '@synonymdev/pubky'
+          - '@synonymdev/pubky-*'
+          - '@synonymdev/*pubky*'
+  - package-ecosystem: npm
     directory: /vite-starter
     schedule:
       interval: weekly
