@@ -75,7 +75,7 @@ VITE_SHOW_DEVELOPMENT_SIGNUP=false
 The app namespace and client id live in `src/pubky.ts`:
 
 ```ts
-export const APP_CLIENT_ID = 'template.app'
+export const APP_CLIENT_ID = 'template'
 export const APP_PATH = `/pub/${APP_CLIENT_ID}/`
 ```
 

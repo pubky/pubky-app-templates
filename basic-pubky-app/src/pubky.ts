@@ -1,7 +1,7 @@
 import { AuthFlowKind, Keypair, Pubky, PublicKey } from '@synonymdev/pubky'
 import type { AuthFlow, Capabilities, Session } from '@synonymdev/pubky'
 
-export const APP_CLIENT_ID = 'template.app' as const
+export const APP_CLIENT_ID = 'template' as const
 export const APP_PATH = `/pub/${APP_CLIENT_ID}/` as const
 export const APP_CAPABILITIES = `${APP_PATH}:rw` as Capabilities
 export const TESTNET_HOMESERVER = 'pubky8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo'
