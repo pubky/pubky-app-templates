@@ -1,0 +1,83 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Pages site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            basic-pubky-app/package-lock.json
+            vite-starter/package-lock.json
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+
+      - name: Install basic Pubky app dependencies
+        run: npm ci
+        working-directory: basic-pubky-app
+
+      - name: Build basic Pubky app for mainnet
+        run: npm run build -- --base ./
+        working-directory: basic-pubky-app
+        env:
+          VITE_PUBKY_TESTNET: 'false'
+          VITE_SHOW_DEVELOPMENT_SIGNUP: 'false'
+
+      - name: Install Vite starter dependencies
+        run: npm ci
+        working-directory: vite-starter
+
+      - name: Build Vite starter
+        run: npm run build -- --base ./
+        working-directory: vite-starter
+
+      - name: Assemble Pages site
+        run: |
+          mkdir -p _site/basic-pubky-app _site/vite-starter
+          cp -R pages/. _site/
+          cp -R basic-pubky-app/dist/. _site/basic-pubky-app/
+          cp -R vite-starter/dist/. _site/vite-starter/
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy Pages site
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

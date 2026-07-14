@@ -5,6 +5,10 @@ export const APP_CLIENT_ID = 'template.app' as const
 export const APP_PATH = `/pub/${APP_CLIENT_ID}/` as const
 export const APP_CAPABILITIES = `${APP_PATH}:rw` as Capabilities
 export const TESTNET_HOMESERVER = 'pubky8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo'
+export const PRODUCTION_HOMESERVER = 'pubky8um71us3fyw6h8wbcxb5ar3rwusy1a6u49956ikzojg3gcwd1dty'
+export const IS_TESTNET = import.meta.env.VITE_PUBKY_TESTNET === 'true'
+export const SHOW_DEVELOPMENT_SIGNUP = import.meta.env.VITE_SHOW_DEVELOPMENT_SIGNUP !== 'false'
+export const DEFAULT_HOMESERVER = IS_TESTNET ? TESTNET_HOMESERVER : PRODUCTION_HOMESERVER
 
 const SESSION_KEY = `${APP_CLIENT_ID}:session`
 const RING_AUTH_CANCELED_ERROR_NAME = 'RingAuthCanceled'
@@ -20,7 +24,7 @@ export interface RingLoginFlow {
 }
 
 function createPubky() {
-  if (import.meta.env.VITE_PUBKY_TESTNET === 'true') {
+  if (IS_TESTNET) {
     return Pubky.testnet(import.meta.env.VITE_PUBKY_TESTNET_HOST || undefined)
   }
 

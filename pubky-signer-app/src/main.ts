@@ -1,8 +1,8 @@
 import './style.css'
 import {
-  TESTNET_HOMESERVER,
-  TESTNET_HOMESERVER_ADMIN_PASSWORD,
-  TESTNET_HOMESERVER_ADMIN_URL,
+  DEFAULT_HOMESERVER,
+  DEFAULT_HOMESERVER_ADMIN_PASSWORD,
+  DEFAULT_HOMESERVER_ADMIN_URL,
   approveAuthRequest,
   createIdentity,
   deleteIdentity,
@@ -252,7 +252,7 @@ function localIdentityView(identity: SignerIdentity) {
 
 function homeserverView(identity: SignerIdentity) {
   const actionDisabled = disabledAttr()
-  const homeserver = identity.homeserver || TESTNET_HOMESERVER
+  const homeserver = identity.homeserver || DEFAULT_HOMESERVER
 
   return `
     <div class="split-section stack homeserver-panel">
@@ -271,7 +271,7 @@ function homeserverView(identity: SignerIdentity) {
           <input
             name="adminUrl"
             autocomplete="off"
-            value="${escapeHtml(TESTNET_HOMESERVER_ADMIN_URL)}"
+            value="${escapeHtml(DEFAULT_HOMESERVER_ADMIN_URL)}"
           />
         </label>
         <label>
@@ -280,7 +280,7 @@ function homeserverView(identity: SignerIdentity) {
             name="adminPassword"
             type="password"
             autocomplete="off"
-            value="${escapeHtml(TESTNET_HOMESERVER_ADMIN_PASSWORD)}"
+            value="${escapeHtml(DEFAULT_HOMESERVER_ADMIN_PASSWORD)}"
           />
         </label>
         <div class="button-row">

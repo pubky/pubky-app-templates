@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Live examples and source links for the Pubky application templates."
+    />
+    <title>Pubky App Templates</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main>
+      <header class="hero">
+        <h1>Pubky App Templates</h1>
+        <p class="intro">
+          Small, ready-to-copy starting points for building browser-based Pubky apps.
+        </p>
+      </header>
+
+      <section class="templates" aria-label="Templates">
+        <article class="card">
+          <div class="card-heading">
+            <h2>Basic Pubky App</h2>
+            <span class="badge">Mainnet</span>
+          </div>
+          <p>Ring authentication, session restore, storage CRUD, and event streaming.</p>
+          <div class="actions">
+            <a class="primary" href="./basic-pubky-app/">Open demo</a>
+            <a href="https://github.com/pubky/pubky-app-templates/tree/main/basic-pubky-app"
+              >View source</a
+            >
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-heading">
+            <h2>Vite Starter</h2>
+            <span class="badge neutral">Starter</span>
+          </div>
+          <p>A plain Vite and TypeScript starting point used by the Pubky app tutorial.</p>
+          <div class="actions">
+            <a class="primary" href="./vite-starter/">Open demo</a>
+            <a href="https://github.com/pubky/pubky-app-templates/tree/main/vite-starter"
+              >View source</a
+            >
+          </div>
+        </article>
+
+        <article class="card unavailable">
+          <div class="card-heading">
+            <h2>Key Manager</h2>
+            <span class="badge warning">Local only</span>
+          </div>
+          <p>
+            Not deployed because it stores recovery phrases and identity secrets in browser local
+            storage. Mainly used as a developer tool, not considered safe for production use
+          </p>
+          <div class="actions">
+            <a href="https://github.com/pubky/pubky-app-templates/tree/main/pubky-signer-app"
+              >Run locally from source</a
+            >
+          </div>
+        </article>
+      </section>
+
+      <footer>
+        <a href="https://github.com/pubky/pubky-app-templates">GitHub repository</a>
+      </footer>
+    </main>
+  </body>
+</html>

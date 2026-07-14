@@ -3,7 +3,8 @@ import { toCanvas } from 'qrcode'
 import './style.css'
 import {
   APP_PATH,
-  TESTNET_HOMESERVER,
+  DEFAULT_HOMESERVER,
+  SHOW_DEVELOPMENT_SIGNUP,
   createUser,
   isRingAuthCanceled,
   restoreSavedSession,
@@ -103,30 +104,35 @@ function statusView() {
 
 function authView() {
   return `
-    <section class="auth-grid">
+    <section class="auth-grid ${SHOW_DEVELOPMENT_SIGNUP ? '' : 'ring-only'}">
       ${ringLoginPanel()}
+      ${SHOW_DEVELOPMENT_SIGNUP ? newIdentityPanel() : ''}
+    </section>
+  `
+}
 
-      <section class="panel">
-        <div>
-          <h2>New identity</h2>
-          <p class="muted">
-            Create a new key pair, sign up and sign in on the homeserver, in one go.
-            Primarily for development, to move through auth quickly.
-          </p>
-        </div>
-        <form id="create-user-form" class="record-form">
-          <label>
-            Homeserver public key
-            <input
-              name="homeserver"
-              autocomplete="off"
-              value="${escapeHtml(TESTNET_HOMESERVER)}"
-              required
-            />
-          </label>
-          <button type="submit" ${disabledAttr()}>Create identity and sign in</button>
-        </form>
-      </section>
+function newIdentityPanel() {
+  return `
+    <section class="panel">
+      <div>
+        <h2>New identity</h2>
+        <p class="muted">
+          Create a new key pair, sign up and sign in on the homeserver, in one go.
+          Primarily for development, to move through auth quickly.
+        </p>
+      </div>
+      <form id="create-user-form" class="record-form">
+        <label>
+          Homeserver public key
+          <input
+            name="homeserver"
+            autocomplete="off"
+            value="${escapeHtml(DEFAULT_HOMESERVER)}"
+            required
+          />
+        </label>
+        <button type="submit" ${disabledAttr()}>Create identity and sign in</button>
+      </form>
     </section>
   `
 }
@@ -603,7 +609,10 @@ function disabledAttr() {
 }
 
 function ringLinkDisabledAttr() {
-  return state.busy || state.ringLogin.loading || state.ringLogin.expired || !state.ringLogin.authorizationUrl
+  return state.busy ||
+    state.ringLogin.loading ||
+    state.ringLogin.expired ||
+    !state.ringLogin.authorizationUrl
     ? 'disabled'
     : ''
 }

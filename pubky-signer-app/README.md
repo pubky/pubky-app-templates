@@ -66,6 +66,16 @@ VITE_PUBKY_TESTNET=false
 
 Set `VITE_PUBKY_TESTNET=false` only when you intentionally want mainnet defaults.
 
+Mainnet mode defaults to the production homeserver:
+
+```text
+8um71us3fyw6h8wbcxb5ar3rwusy1a6u49956ikzojg3gcwd1dty
+```
+
+Its PKDNS record advertises the browser-compatible `homeserver.pubky.app` endpoint. The Pubky SDK
+resolves that transport from the homeserver public key, so no production admin URL or password is
+configured in this template.
+
 Default testnet homeserver:
 
 ```text

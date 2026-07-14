@@ -32,6 +32,15 @@ npm run dev
 
 Use **Sign in with Pubky Ring** to approve the app session from Ring. Use **New identity** to create a key pair, sign up and sign in on the configured homeserver, in one go. The new identity helper is primarily for development, to move through auth quickly.
 
+Production builds default to the homeserver:
+
+```text
+pubky8um71us3fyw6h8wbcxb5ar3rwusy1a6u49956ikzojg3gcwd1dty
+```
+
+The hosted GitHub Pages build sets `VITE_SHOW_DEVELOPMENT_SIGNUP=false`, which hides the
+development-only new identity helper and keeps Ring sign-in available.
+
 ## Local Testnet
 
 Run a local testnet in another terminal:
@@ -58,6 +67,7 @@ Optional environment variables:
 ```bash
 VITE_PUBKY_TESTNET_HOST=localhost
 VITE_PUBKY_HTTP_RELAY=https://httprelay.pubky.app/inbox/
+VITE_SHOW_DEVELOPMENT_SIGNUP=false
 ```
 
 ## App Settings

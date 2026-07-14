@@ -6,6 +6,11 @@ import { wordlist as englishWordlist } from '@scure/bip39/wordlists/english.js'
 export const TESTNET_HOMESERVER = '8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo'
 export const TESTNET_HOMESERVER_ADMIN_URL = `http://${import.meta.env.VITE_PUBKY_TESTNET_HOST || '127.0.0.1'}:6288`
 export const TESTNET_HOMESERVER_ADMIN_PASSWORD = 'admin'
+export const PRODUCTION_HOMESERVER = '8um71us3fyw6h8wbcxb5ar3rwusy1a6u49956ikzojg3gcwd1dty'
+export const IS_TESTNET = import.meta.env.VITE_PUBKY_TESTNET !== 'false'
+export const DEFAULT_HOMESERVER = IS_TESTNET ? TESTNET_HOMESERVER : PRODUCTION_HOMESERVER
+export const DEFAULT_HOMESERVER_ADMIN_URL = IS_TESTNET ? TESTNET_HOMESERVER_ADMIN_URL : ''
+export const DEFAULT_HOMESERVER_ADMIN_PASSWORD = IS_TESTNET ? TESTNET_HOMESERVER_ADMIN_PASSWORD : ''
 
 const LEGACY_SIGNER_KEY = 'pubky-signer-template:identity'
 const IDENTITIES_KEY = 'pubky-key-manager:identities'
@@ -54,11 +59,11 @@ export interface AuthRequestPreview {
 export const pubky = createPubky()
 
 function createPubky() {
-  if (import.meta.env.VITE_PUBKY_TESTNET === 'false') {
-    return new Pubky()
+  if (IS_TESTNET) {
+    return Pubky.testnet(import.meta.env.VITE_PUBKY_TESTNET_HOST || undefined)
   }
 
-  return Pubky.testnet(import.meta.env.VITE_PUBKY_TESTNET_HOST || undefined)
+  return new Pubky()
 }
 
 export function createIdentity() {
@@ -186,7 +191,7 @@ async function generateSignupToken(settings: SignupSettings) {
     method: 'GET',
     headers: {
       'X-Admin-Password':
-        normalizedOptional(settings.adminPassword) || TESTNET_HOMESERVER_ADMIN_PASSWORD,
+        normalizedOptional(settings.adminPassword) || DEFAULT_HOMESERVER_ADMIN_PASSWORD,
     },
   })
 
@@ -201,7 +206,12 @@ async function generateSignupToken(settings: SignupSettings) {
 }
 
 function normalizeAdminUrl(value: string) {
-  return normalizedOptional(value) || TESTNET_HOMESERVER_ADMIN_URL
+  const adminUrl = normalizedOptional(value) || DEFAULT_HOMESERVER_ADMIN_URL
+  if (!adminUrl) {
+    throw new Error('No homeserver admin endpoint is configured for signup-token generation.')
+  }
+
+  return adminUrl
 }
 
 function tryParseSignin(url: string) {
@@ -326,8 +336,7 @@ function parseSavedSigner(value: unknown): SavedSigner | undefined {
     createdAt: typeof value.createdAt === 'string' ? value.createdAt : new Date().toISOString(),
     homeserver: typeof value.homeserver === 'string' ? value.homeserver : undefined,
     id: typeof value.id === 'string' ? value.id : undefined,
-    recoveryPhrase:
-      typeof value.recoveryPhrase === 'string' ? value.recoveryPhrase : undefined,
+    recoveryPhrase: typeof value.recoveryPhrase === 'string' ? value.recoveryPhrase : undefined,
     secret: value.secret,
   }
 }
