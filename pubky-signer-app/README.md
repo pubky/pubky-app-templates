@@ -1,6 +1,6 @@
-# Pubky Key Manager
+# Pubky Identity Manager
 
-A Vite + TypeScript template for a local Pubky key manager.
+A Vite + TypeScript template for a local Pubky identity manager.
 
 It is meant to stand in for Pubky Ring while testing auth flows against local Pubky apps and a local testnet. It accepts pasted auth links and can scan a QR code from another tab via screen capture.
 
@@ -40,7 +40,7 @@ cargo install pubky-testnet
 pubky-testnet
 ```
 
-Open the key manager on the **Identity** tab. The left side creates and imports identities with recovery phrases; the right side shows active identity details, signs the active identity up to a homeserver, and publishes its PKARR homeserver record. The default homeserver is the local testnet homeserver, and the default admin settings match `pubky-testnet`.
+Open the identity manager on the **Identity** tab. The left side creates and imports identities with recovery phrases; the right side shows active identity details, signs the active identity up to a homeserver, and publishes its PKARR homeserver record. The default homeserver is the local testnet homeserver, and the default admin settings match `pubky-testnet`.
 
 Then move to the **Auth** tab and start the app you want to test. Auth requests are approved with the active identity. When that app shows a Pubky Ring auth QR code, either:
 

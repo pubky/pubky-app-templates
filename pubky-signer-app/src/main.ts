@@ -82,7 +82,7 @@ function render() {
       <header class="app-header">
         <div class="title-block">
           <div>
-            <h1>Pubky Key Manager</h1>
+            <h1>Pubky Identity Manager</h1>
           </div>
           ${pageNav(route)}
         </div>

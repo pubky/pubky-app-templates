@@ -10,7 +10,7 @@ Live examples are published at
 - [basic-pubky-app](basic-pubky-app/) - Minimal Vite + TypeScript app with auth, storage, and event streaming:
   `npx tiged pubky/pubky-app-templates/basic-pubky-app my-pubky-app`
 
-- [pubky-signer-app](pubky-signer-app/) - Pubky Key Manager template for testing Pubky Ring auth flows against local Pubky apps:
+- [pubky-signer-app](pubky-signer-app/) - Pubky Identity Manager template for testing Pubky Ring auth flows against local Pubky apps:
   `npx tiged pubky/pubky-app-templates/pubky-signer-app pubky-signer-app`
 
   This template is not hosted on GitHub Pages because it stores recovery phrases and identity
