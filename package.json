@@ -18,7 +18,7 @@
     "github-actionlint": "^1.7.12",
     "globals": "^17.7.0",
     "prettier": "^3.9.5",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "typescript-eslint": "^8.64.0"
   },
   "overrides": {
