@@ -9,11 +9,15 @@ export interface AppStreamEvent {
   contentHash?: string
 }
 
+export interface AppEventStream {
+  done: Promise<void>
+  stop: () => Promise<void>
+}
+
 export async function startAppEventStream(
   session: Session,
   onEvent: (event: AppStreamEvent) => void,
-  onError: (error: unknown) => void,
-) {
+): Promise<AppEventStream> {
   const stream = await pubky
     .eventStreamForUser(session.info.publicKey, null)
     .path(APP_PATH)
@@ -24,21 +28,25 @@ export async function startAppEventStream(
   let stopped = false
 
   async function read() {
-    while (!stopped) {
-      const { done, value } = await reader.read()
-      if (done) return
+    try {
+      while (!stopped) {
+        const { done, value } = await reader.read()
+        if (done) return
 
-      onEvent(toAppStreamEvent(value as PubkyEvent))
+        onEvent(toAppStreamEvent(value as PubkyEvent))
+      }
+    } finally {
+      reader.releaseLock()
     }
   }
 
-  void read().catch((error: unknown) => {
-    if (!stopped) onError(error)
-  })
-
-  return async () => {
-    stopped = true
-    await reader.cancel()
+  return {
+    done: read(),
+    stop: async () => {
+      if (stopped) return
+      stopped = true
+      await reader.cancel()
+    },
   }
 }
 

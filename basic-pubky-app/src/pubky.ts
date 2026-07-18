@@ -4,6 +4,7 @@ import { APP_CAPABILITIES, APP_CLIENT_ID, HTTP_RELAY, IS_TESTNET, TESTNET_HOST }
 
 const SESSION_KEY = `${APP_CLIENT_ID}:session`
 const RING_AUTH_CANCELED_ERROR_NAME = 'RingAuthCanceled'
+const RING_AUTH_EXPIRED_ERROR_NAME = 'RingAuthExpired'
 const RING_AUTH_POLL_INTERVAL_MS = 1200
 const RING_AUTH_MAX_POLL_ATTEMPTS = 250
 
@@ -43,22 +44,27 @@ export async function restoreSavedSession() {
 
   try {
     return await pubky.restoreSession(savedSession)
-  } catch {
-    localStorage.removeItem(SESSION_KEY)
-    return undefined
+  } catch (error) {
+    if (isInvalidSavedSessionError(error)) {
+      localStorage.removeItem(SESSION_KEY)
+      return undefined
+    }
+
+    throw error
   }
 }
 
 export async function signOut(session: Session) {
-  try {
-    await session.signout()
-  } finally {
-    localStorage.removeItem(SESSION_KEY)
-  }
+  await session.signout()
+  localStorage.removeItem(SESSION_KEY)
 }
 
 export function isRingAuthCanceled(error: unknown) {
-  return error instanceof Error && error.name === RING_AUTH_CANCELED_ERROR_NAME
+  return isErrorNamed(error, RING_AUTH_CANCELED_ERROR_NAME)
+}
+
+export function isRingAuthExpired(error: unknown) {
+  return isErrorNamed(error, RING_AUTH_EXPIRED_ERROR_NAME)
 }
 
 function awaitRingApproval(flow: AuthFlow) {
@@ -78,19 +84,23 @@ function awaitRingApproval(flow: AuthFlow) {
   }
 
   const awaitApproval = (async () => {
-    let attempts = 0
-
-    for (;;) {
+    for (let attempt = 1; attempt <= RING_AUTH_MAX_POLL_ATTEMPTS; attempt++) {
       if (canceled) throw ringAuthCanceledError()
-      if (++attempts > RING_AUTH_MAX_POLL_ATTEMPTS) {
-        throw new Error('Pubky Ring sign-in link expired. Generate a fresh link and try again.')
+
+      try {
+        const session = await flow.tryPollOnce()
+        if (session) return session
+      } catch (error) {
+        if (canceled) throw ringAuthCanceledError()
+        throw error
       }
 
-      const session = await flow.tryPollOnce()
-      if (session) return session
-
-      await sleep(RING_AUTH_POLL_INTERVAL_MS)
+      if (attempt < RING_AUTH_MAX_POLL_ATTEMPTS) {
+        await sleep(RING_AUTH_POLL_INTERVAL_MS)
+      }
     }
+
+    throw ringAuthExpiredError()
   })()
 
   return {
@@ -103,6 +113,20 @@ function ringAuthCanceledError() {
   const error = new Error('Pubky Ring sign-in canceled')
   error.name = RING_AUTH_CANCELED_ERROR_NAME
   return error
+}
+
+function ringAuthExpiredError() {
+  const error = new Error('Pubky Ring sign-in link expired. Generate a fresh link and try again.')
+  error.name = RING_AUTH_EXPIRED_ERROR_NAME
+  return error
+}
+
+function isInvalidSavedSessionError(error: unknown) {
+  return isErrorNamed(error, 'AuthenticationError') || isErrorNamed(error, 'InvalidInput')
+}
+
+function isErrorNamed(error: unknown, name: string) {
+  return error instanceof Error && error.name === name
 }
 
 function sleep(ms: number) {

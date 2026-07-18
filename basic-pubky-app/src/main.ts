@@ -5,13 +5,14 @@ import { APP_PATH, DEVELOPMENT_SIGNUP_HOMESERVER, SHOW_DEVELOPMENT_SIGNUP } from
 import {
   createUser,
   isRingAuthCanceled,
+  isRingAuthExpired,
   restoreSavedSession,
   saveSession,
   signOut,
   startRingLogin,
   type RingLoginFlow,
 } from './pubky'
-import { startAppEventStream, type AppStreamEvent } from './events'
+import { startAppEventStream, type AppEventStream, type AppStreamEvent } from './events'
 import { deleteRecord, listRecords, recordPath, saveRecord, type AppRecord } from './storage'
 
 const RING_QR_SIZE = 220
@@ -64,7 +65,7 @@ async function init() {
     }
   })
 
-  if (!state.session) await refreshRingLogin()
+  if (!state.session) await refreshRingLogin(Boolean(state.error))
 }
 
 function render() {
@@ -88,7 +89,7 @@ function render() {
 function signedInHeader(session: Session) {
   return `
     <div class="user-block">
-      <button id="sign-out" type="button">Sign out</button>
+      <button id="sign-out" type="button" ${disabledAttr()}>Sign out</button>
       <p class="pubky-id">${escapeHtml(session.info.publicKey.toString())}</p>
     </div>
   `
@@ -137,7 +138,7 @@ function newIdentityPanel() {
 function ringLoginPanel() {
   const { authorizationUrl: authUrl, copied, expired, loading } = state.ringLogin
   const busy = Boolean(state.busy)
-  const canUseAuthUrl = Boolean(authUrl) && !loading && !expired
+  const canUseAuthUrl = !busy && Boolean(authUrl) && !loading && !expired
 
   return `
     <section class="panel">
@@ -157,7 +158,7 @@ function ringLoginPanel() {
               ? `<a class="button-link primary" href="${escapeHtml(authUrl)}">Authorize with Pubky Ring</a>`
               : `<button type="button" disabled>Authorize with Pubky Ring</button>`
           }
-          <button id="copy-ring-link" type="button" ${disabledAttr(busy || !canUseAuthUrl)}>
+          <button id="copy-ring-link" type="button" ${disabledAttr(!canUseAuthUrl)}>
             ${copied ? 'Copied' : 'Copy link'}
           </button>
         </div>
@@ -206,7 +207,7 @@ function appView() {
       <section class="panel">
         <div class="section-header">
           <h2>Editor</h2>
-          <button id="new-record" type="button">New</button>
+          <button id="new-record" type="button" ${disabledAttr()}>New</button>
         </div>
         ${recordForm()}
       </section>
@@ -270,8 +271,8 @@ function recordItem(record: AppRecord) {
         <span>${escapeHtml(formatDate(record.updatedAt))}</span>
       </div>
       <div class="actions">
-        <button type="button" data-edit-id="${escapeHtml(record.id)}">Edit</button>
-        <button type="button" data-delete-id="${escapeHtml(record.id)}">Delete</button>
+        <button type="button" data-edit-id="${escapeHtml(record.id)}" ${disabledAttr()}>Edit</button>
+        <button type="button" data-delete-id="${escapeHtml(record.id)}" ${disabledAttr()}>Delete</button>
       </div>
     </li>
   `
@@ -305,7 +306,7 @@ function handleClick(event: MouseEvent) {
   if (!(target instanceof Element)) return
 
   const button = target.closest<HTMLButtonElement>('button')
-  if (!button) return
+  if (!button || state.busy) return
 
   if (button.dataset.editId) {
     state.editingId = button.dataset.editId
@@ -342,11 +343,12 @@ function handleSubmit(event: SubmitEvent) {
   if (!(form instanceof HTMLFormElement)) return
 
   event.preventDefault()
+  if (state.busy) return
   if (form.id === 'create-user-form') void handleCreateUser(form)
   if (form.id === 'record-form') void handleSaveRecord(form)
 }
 
-async function refreshRingLogin() {
+async function refreshRingLogin(preserveError = false) {
   const token = Symbol('ring-login')
   cancelRingLogin()
 
@@ -354,7 +356,7 @@ async function refreshRingLogin() {
     loading: true,
     token,
   }
-  state.error = undefined
+  if (!preserveError) state.error = undefined
   render()
 
   try {
@@ -378,7 +380,7 @@ async function refreshRingLogin() {
 
     state.ringAuthFlow = undefined
     state.ringLogin = {}
-    state.error = formatError(error)
+    setError(error)
     render()
   }
 }
@@ -397,11 +399,8 @@ async function handleRingApproval(flow: RingLoginFlow, token: symbol) {
     if (isRingAuthCanceled(error) || !isActiveRingLogin(token)) return
 
     state.ringAuthFlow = undefined
-    state.ringLogin = {
-      expired: true,
-      token,
-    }
-    state.error = formatError(error)
+    state.ringLogin = isRingAuthExpired(error) ? { expired: true, token } : {}
+    setError(error)
     render()
   }
 }
@@ -422,7 +421,7 @@ async function handleCopyRingLink() {
       render()
     }, 2200)
   } catch (error) {
-    state.error = formatError(error)
+    setError(error)
     render()
   }
 }
@@ -494,20 +493,30 @@ async function toggleStream() {
 
   const session = requireSession()
   await run('Starting stream...', async () => {
-    state.stopStream = await startAppEventStream(
-      session,
-      (event) => {
-        state.streamEvents = [event, ...state.streamEvents].slice(0, 12)
-        render()
-      },
-      (error) => {
-        state.stopStream = undefined
-        state.error = formatError(error)
-        render()
-      },
-    )
+    const stream = await startAppEventStream(session, (event) => {
+      state.streamEvents = [event, ...state.streamEvents].slice(0, 12)
+      render()
+    })
+    state.stopStream = stream.stop
+    watchEventStream(stream)
     setNotice('Stream started.')
   })
+}
+
+function watchEventStream(stream: AppEventStream) {
+  void stream.done.then(
+    () => finishEventStream(stream),
+    (error: unknown) => finishEventStream(stream, error),
+  )
+}
+
+function finishEventStream(stream: AppEventStream, error?: unknown) {
+  if (state.stopStream !== stream.stop) return
+
+  state.stopStream = undefined
+  if (error) setError(error)
+  else setNotice('Stream ended.')
+  render()
 }
 
 async function stopStream() {
@@ -562,8 +571,15 @@ function isActiveRingLogin(token: symbol) {
 }
 
 function setNotice(notice: string, path?: string) {
+  state.error = undefined
   state.notice = notice
   state.noticePath = path
+}
+
+function setError(error: unknown) {
+  state.error = formatError(error)
+  state.notice = undefined
+  state.noticePath = undefined
 }
 
 async function run(label: string, task: () => Promise<void>) {
@@ -574,7 +590,7 @@ async function run(label: string, task: () => Promise<void>) {
   try {
     await task()
   } catch (error) {
-    state.error = formatError(error)
+    setError(error)
   } finally {
     state.busy = undefined
     render()
