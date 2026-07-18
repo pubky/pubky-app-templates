@@ -294,6 +294,7 @@ function streamEventItem(event: AppStreamEvent) {
     <li>
       <strong>${escapeHtml(event.type)}</strong>
       <span>${escapeHtml(event.path)}</span>
+      ${event.contentHash ? `<small>Content hash: ${escapeHtml(event.contentHash)}</small>` : ''}
       <small>${escapeHtml(event.cursor)}</small>
     </li>
   `

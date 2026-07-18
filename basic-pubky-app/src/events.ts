@@ -6,6 +6,7 @@ export interface AppStreamEvent {
   type: string
   path: string
   cursor: string
+  contentHash?: string
 }
 
 export async function startAppEventStream(
@@ -46,5 +47,6 @@ function toAppStreamEvent(event: PubkyEvent): AppStreamEvent {
     type: event.eventType,
     path: event.resource.path,
     cursor: event.cursor,
+    contentHash: event.contentHash,
   }
 }
