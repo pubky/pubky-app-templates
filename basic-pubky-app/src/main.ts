@@ -1,10 +1,8 @@
 import type { Session } from '@synonymdev/pubky'
 import { toCanvas } from 'qrcode'
 import './style.css'
+import { APP_PATH, DEFAULT_HOMESERVER, SHOW_DEVELOPMENT_SIGNUP } from './config'
 import {
-  APP_PATH,
-  DEFAULT_HOMESERVER,
-  SHOW_DEVELOPMENT_SIGNUP,
   createUser,
   isRingAuthCanceled,
   restoreSavedSession,

@@ -1,6 +1,6 @@
 import { PubkyResource } from '@synonymdev/pubky'
 import type { Path, Session } from '@synonymdev/pubky'
-import { APP_PATH } from './pubky'
+import { APP_PATH } from './config'
 
 export interface AppRecord {
   id: string

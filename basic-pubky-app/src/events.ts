@@ -1,5 +1,6 @@
 import type { Event as PubkyEvent, Session } from '@synonymdev/pubky'
-import { APP_PATH, pubky } from './pubky'
+import { APP_PATH } from './config'
+import { pubky } from './pubky'
 
 export interface AppStreamEvent {
   type: string
