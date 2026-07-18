@@ -7,20 +7,12 @@ const RING_AUTH_CANCELED_ERROR_NAME = 'RingAuthCanceled'
 const RING_AUTH_POLL_INTERVAL_MS = 1200
 const RING_AUTH_MAX_POLL_ATTEMPTS = 250
 
-export const pubky = createPubky()
+export const pubky = IS_TESTNET ? Pubky.testnet(TESTNET_HOST) : new Pubky()
 
 export interface RingLoginFlow {
   authorizationUrl: string
   awaitApproval: Promise<Session>
   cancel: () => void
-}
-
-function createPubky() {
-  if (IS_TESTNET) {
-    return Pubky.testnet(TESTNET_HOST)
-  }
-
-  return new Pubky()
 }
 
 export async function createUser(homeserver: string) {
@@ -31,7 +23,7 @@ export async function createUser(homeserver: string) {
 }
 
 export function startRingLogin(): RingLoginFlow {
-  const flow = pubky.startAuthFlow(APP_CAPABILITIES, AuthFlowKind.signin(), authRelay())
+  const flow = pubky.startAuthFlow(APP_CAPABILITIES, AuthFlowKind.signin(), HTTP_RELAY)
   const approval = awaitRingApproval(flow)
 
   return {
@@ -41,7 +33,7 @@ export function startRingLogin(): RingLoginFlow {
   }
 }
 
-export async function saveSession(session: Session) {
+export function saveSession(session: Session) {
   localStorage.setItem(SESSION_KEY, session.export())
 }
 
@@ -67,10 +59,6 @@ export async function signOut(session: Session) {
 
 export function isRingAuthCanceled(error: unknown) {
   return error instanceof Error && error.name === RING_AUTH_CANCELED_ERROR_NAME
-}
-
-function authRelay() {
-  return HTTP_RELAY
 }
 
 function awaitRingApproval(flow: AuthFlow) {

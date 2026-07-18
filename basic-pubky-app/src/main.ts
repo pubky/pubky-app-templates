@@ -51,6 +51,8 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
   timeStyle: 'short',
 })
 
+app.addEventListener('click', handleClick)
+app.addEventListener('submit', handleSubmit)
 render()
 void init()
 
@@ -80,7 +82,6 @@ function render() {
     </main>
   `
 
-  bindEvents()
   void renderRingLoginQr()
 }
 
@@ -112,13 +113,11 @@ function authView() {
 function newIdentityPanel() {
   return `
     <section class="panel">
-      <div>
-        <h2>New identity</h2>
-        <p class="muted">
-          Create a new key pair, sign up and sign in on the homeserver, in one go.
-          Primarily for development, to move through auth quickly.
-        </p>
-      </div>
+      <h2>New identity</h2>
+      <p class="muted">
+        Create a new key pair, sign up and sign in on the homeserver, in one go.
+        Primarily for development, to move through auth quickly.
+      </p>
       <form id="create-user-form" class="record-form">
         <label>
           Homeserver public key
@@ -136,15 +135,16 @@ function newIdentityPanel() {
 }
 
 function ringLoginPanel() {
-  const authUrl = state.ringLogin.authorizationUrl
-  const canUseAuthUrl = Boolean(authUrl) && !state.ringLogin.loading && !state.ringLogin.expired
+  const { authorizationUrl: authUrl, copied, expired, loading } = state.ringLogin
+  const busy = Boolean(state.busy)
+  const canUseAuthUrl = Boolean(authUrl) && !loading && !expired
 
   return `
-    <section class="panel ring-login-panel">
+    <section class="panel">
       <div class="section-header">
         <h2>Sign in with Pubky Ring</h2>
-        <button id="refresh-ring-login" type="button" ${refreshRingDisabledAttr()}>
-          ${state.ringLogin.expired ? 'New link' : 'Refresh'}
+        <button id="refresh-ring-login" type="button" ${disabledAttr(busy || Boolean(loading))}>
+          ${expired ? 'New link' : 'Refresh'}
         </button>
       </div>
       <div class="ring-login">
@@ -154,11 +154,11 @@ function ringLoginPanel() {
         <div class="ring-actions">
           ${
             canUseAuthUrl
-              ? `<a id="open-ring-link" class="button-link primary" href="${escapeHtml(authUrl)}">Authorize with Pubky Ring</a>`
+              ? `<a class="button-link primary" href="${escapeHtml(authUrl)}">Authorize with Pubky Ring</a>`
               : `<button type="button" disabled>Authorize with Pubky Ring</button>`
           }
-          <button id="copy-ring-link" type="button" ${ringLinkDisabledAttr()}>
-            ${state.ringLogin.copied ? 'Copied' : 'Copy link'}
+          <button id="copy-ring-link" type="button" ${disabledAttr(busy || !canUseAuthUrl)}>
+            ${copied ? 'Copied' : 'Copy link'}
           </button>
         </div>
       </div>
@@ -167,31 +167,23 @@ function ringLoginPanel() {
 }
 
 function ringQrSlot() {
-  if (state.ringLogin.loading) {
-    return `
-      <div class="qr-placeholder" aria-live="polite">
-        <span class="spinner" aria-hidden="true"></span>
-        <span>Generating link...</span>
-      </div>
-    `
+  const { authorizationUrl, expired, loading } = state.ringLogin
+
+  if (loading) {
+    return ringQrPlaceholder(`
+      <span class="spinner" aria-hidden="true"></span>
+      <span>Generating link...</span>
+    `)
   }
 
-  if (state.ringLogin.expired) {
-    return `
-      <div class="qr-placeholder" aria-live="polite">
-        <strong>Link expired</strong>
-        <span>Generate a fresh one.</span>
-      </div>
-    `
+  if (expired) {
+    return ringQrPlaceholder(`
+      <strong>Link expired</strong>
+      <span>Generate a fresh one.</span>
+    `)
   }
 
-  if (!state.ringLogin.authorizationUrl) {
-    return `
-      <div class="qr-placeholder" aria-live="polite">
-        <span>Waiting for Ring link...</span>
-      </div>
-    `
-  }
+  if (!authorizationUrl) return ringQrPlaceholder('<span>Waiting for Ring link...</span>')
 
   return `
     <canvas
@@ -202,6 +194,10 @@ function ringQrSlot() {
       aria-label="Pubky Ring sign-in QR code"
     ></canvas>
   `
+}
+
+function ringQrPlaceholder(content: string) {
+  return `<div class="qr-placeholder" aria-live="polite">${content}</div>`
 }
 
 function appView() {
@@ -288,65 +284,65 @@ function streamEventsList() {
 
   return `
     <ol class="event-list">
-      ${state.streamEvents
-        .map(
-          (event) => `
-            <li>
-              <strong>${escapeHtml(event.type)}</strong>
-              <span>${escapeHtml(event.path)}</span>
-              <small>${escapeHtml(event.cursor)}</small>
-            </li>
-          `,
-        )
-        .join('')}
+      ${state.streamEvents.map(streamEventItem).join('')}
     </ol>
   `
 }
 
-function bindEvents() {
-  document.querySelector('#refresh-ring-login')?.addEventListener('click', () => {
-    void refreshRingLogin()
-  })
+function streamEventItem(event: AppStreamEvent) {
+  return `
+    <li>
+      <strong>${escapeHtml(event.type)}</strong>
+      <span>${escapeHtml(event.path)}</span>
+      <small>${escapeHtml(event.cursor)}</small>
+    </li>
+  `
+}
 
-  document.querySelector('#copy-ring-link')?.addEventListener('click', () => {
-    void handleCopyRingLink()
-  })
+function handleClick(event: MouseEvent) {
+  const target = event.target
+  if (!(target instanceof Element)) return
 
-  document.querySelector('#create-user-form')?.addEventListener('submit', (event) => {
-    event.preventDefault()
-    void handleCreateUser(event.currentTarget as HTMLFormElement)
-  })
+  const button = target.closest<HTMLButtonElement>('button')
+  if (!button) return
 
-  document.querySelector('#sign-out')?.addEventListener('click', () => {
-    void handleSignOut()
-  })
-
-  document.querySelector('#new-record')?.addEventListener('click', () => {
-    state.editingId = undefined
+  if (button.dataset.editId) {
+    state.editingId = button.dataset.editId
     render()
-  })
+    return
+  }
 
-  document.querySelector('#record-form')?.addEventListener('submit', (event) => {
-    event.preventDefault()
-    void handleSaveRecord(event.currentTarget as HTMLFormElement)
-  })
+  if (button.dataset.deleteId) {
+    void handleDeleteRecord(button.dataset.deleteId)
+    return
+  }
 
-  document.querySelectorAll<HTMLButtonElement>('[data-edit-id]').forEach((button) => {
-    button.addEventListener('click', () => {
-      state.editingId = button.dataset.editId
+  switch (button.id) {
+    case 'refresh-ring-login':
+      void refreshRingLogin()
+      break
+    case 'copy-ring-link':
+      void handleCopyRingLink()
+      break
+    case 'sign-out':
+      void handleSignOut()
+      break
+    case 'new-record':
+      state.editingId = undefined
       render()
-    })
-  })
+      break
+    case 'toggle-stream':
+      void toggleStream()
+  }
+}
 
-  document.querySelectorAll<HTMLButtonElement>('[data-delete-id]').forEach((button) => {
-    button.addEventListener('click', () => {
-      void handleDeleteRecord(button.dataset.deleteId)
-    })
-  })
+function handleSubmit(event: SubmitEvent) {
+  const form = event.target
+  if (!(form instanceof HTMLFormElement)) return
 
-  document.querySelector('#toggle-stream')?.addEventListener('click', () => {
-    void toggleStream()
-  })
+  event.preventDefault()
+  if (form.id === 'create-user-form') void handleCreateUser(form)
+  if (form.id === 'record-form') void handleSaveRecord(form)
 }
 
 async function refreshRingLogin() {
@@ -393,7 +389,7 @@ async function handleRingApproval(flow: RingLoginFlow, token: symbol) {
 
     state.ringAuthFlow = undefined
     await run('Completing Pubky Ring sign-in...', async () => {
-      await saveSession(session)
+      saveSession(session)
       await activateSession(session, 'Signed in with Pubky Ring.')
     })
   } catch (error) {
@@ -415,19 +411,13 @@ async function handleCopyRingLink() {
 
   try {
     await copyTextToClipboard(authUrl)
-    state.ringLogin = {
-      ...state.ringLogin,
-      copied: true,
-    }
+    state.ringLogin.copied = true
     setNotice('Pubky Ring link copied.')
     render()
 
     window.setTimeout(() => {
       if (state.ringLogin.authorizationUrl !== authUrl) return
-      state.ringLogin = {
-        ...state.ringLogin,
-        copied: false,
-      }
+      state.ringLogin.copied = false
       render()
     }, 2200)
   } catch (error) {
@@ -442,7 +432,7 @@ async function handleCreateUser(form: HTMLFormElement) {
 
   await run('Creating identity...', async () => {
     const session = await createUser(homeserver)
-    await saveSession(session)
+    saveSession(session)
     await activateSession(session, 'Identity created and signed in.')
   })
 }
@@ -465,8 +455,7 @@ async function handleSaveRecord(form: HTMLFormElement) {
   })
 }
 
-async function handleDeleteRecord(id: string | undefined) {
-  if (!id) return
+async function handleDeleteRecord(id: string) {
   const session = requireSession()
 
   await run('Deleting record...', async () => {
@@ -602,21 +591,8 @@ function getAppElement() {
   return element
 }
 
-function disabledAttr() {
-  return state.busy ? 'disabled' : ''
-}
-
-function ringLinkDisabledAttr() {
-  return state.busy ||
-    state.ringLogin.loading ||
-    state.ringLogin.expired ||
-    !state.ringLogin.authorizationUrl
-    ? 'disabled'
-    : ''
-}
-
-function refreshRingDisabledAttr() {
-  return state.busy || state.ringLogin.loading ? 'disabled' : ''
+function disabledAttr(disabled = Boolean(state.busy)) {
+  return disabled ? 'disabled' : ''
 }
 
 function formValue(formData: FormData, name: string) {
