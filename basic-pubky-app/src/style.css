@@ -13,17 +13,28 @@ h2 { font-size: 1.1rem; }
 button,
 .button-link,
 input,
-textarea {
+textarea,
+.panel,
+.status,
+.qr-frame {
   border: 1px solid #d8dde5;
   border-radius: 6px;
+  background: #ffffff;
+}
+
+button,
+.button-link,
+input,
+textarea {
   padding: 0.6rem;
   color: inherit;
   font: inherit;
-  background: #ffffff;
 }
 
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: 0.55; }
+button:not(:disabled):hover,
+.button-link:hover { border-color: #98a2b3; }
 .button-link {
   display: inline-flex;
   align-items: center;
@@ -37,6 +48,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   color: #ffffff;
   background: #17202a;
 }
+.button-link.primary:hover { border-color: #344054; background: #344054; }
 input, textarea { width: 100%; }
 textarea { resize: vertical; }
 
@@ -44,13 +56,6 @@ textarea { resize: vertical; }
   max-width: 1040px;
   margin: 0 auto;
   padding: 1rem 2rem 2rem;
-}
-
-.panel,
-.status {
-  border: 1px solid #d8dde5;
-  border-radius: 6px;
-  background: #ffffff;
 }
 
 .panel { padding: 1rem; }
@@ -80,7 +85,9 @@ textarea { resize: vertical; }
 .grid,
 .record-form,
 .record-list,
-.event-list {
+.event-list,
+.ring-login,
+.ring-actions {
   display: grid;
   gap: 1rem;
 }
@@ -93,31 +100,19 @@ textarea { resize: vertical; }
 .grid { grid-template-columns: minmax(0, 1fr) minmax(260px, 0.8fr); }
 .stream-panel { grid-column: 1 / -1; }
 
-.ring-login,
-.ring-actions {
-  display: grid;
-  gap: 0.75rem;
-}
-
-.ring-login { justify-items: start; }
+.ring-login { justify-items: center; }
 
 .qr-frame {
   display: grid;
   place-items: center;
-  width: 252px;
-  max-width: 100%;
+  width: min(100%, 252px);
   aspect-ratio: 1;
-  border: 1px solid #d8dde5;
-  border-radius: 6px;
-  background: #ffffff;
 }
 
 .ring-qr {
   display: block;
-  width: 220px;
-  height: 220px;
-  max-width: calc(100% - 2rem);
-  max-height: calc(100% - 2rem);
+  width: min(220px, calc(100% - 2rem));
+  aspect-ratio: 1;
 }
 
 .qr-placeholder {
@@ -167,7 +162,8 @@ textarea { resize: vertical; }
   padding-top: 0.75rem;
 }
 
-.record-list li:first-child { border-top: 0; padding-top: 0; }
+.record-list li:first-child,
+.event-list li:first-child { border-top: 0; padding-top: 0; }
 
 .record-list strong,
 .record-list span,
@@ -212,24 +208,17 @@ textarea { resize: vertical; }
   .app-shell { padding: 0.5rem 1rem 1rem; }
 
   .app-header,
-  .auth-grid,
-  .grid,
-  .user-block,
   .section-header,
   .record-list li {
     display: grid;
-    grid-template-columns: 1fr;
     align-items: stretch;
   }
 
-  .user-block { max-width: 100%; }
-
-  .ring-login,
-  .qr-frame {
-    justify-self: stretch;
-  }
-
+  .auth-grid,
+  .grid,
   .ring-actions {
     grid-template-columns: 1fr;
   }
+
+  .user-block { max-width: 100%; }
 }
