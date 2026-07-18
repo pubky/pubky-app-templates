@@ -1,7 +1,7 @@
 import type { Session } from '@synonymdev/pubky'
 import { toCanvas } from 'qrcode'
 import './style.css'
-import { APP_PATH, DEFAULT_HOMESERVER, SHOW_DEVELOPMENT_SIGNUP } from './config'
+import { APP_PATH, DEVELOPMENT_SIGNUP_HOMESERVER, SHOW_DEVELOPMENT_SIGNUP } from './config'
 import {
   createUser,
   isRingAuthCanceled,
@@ -125,7 +125,7 @@ function newIdentityPanel() {
           <input
             name="homeserver"
             autocomplete="off"
-            value="${escapeHtml(DEFAULT_HOMESERVER)}"
+            value="${escapeHtml(DEVELOPMENT_SIGNUP_HOMESERVER)}"
             required
           />
         </label>

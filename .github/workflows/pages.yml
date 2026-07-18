@@ -43,7 +43,6 @@ jobs:
         working-directory: basic-pubky-app
         env:
           VITE_PUBKY_TESTNET: 'false'
-          VITE_SHOW_DEVELOPMENT_SIGNUP: 'false'
 
       - name: Install Vite starter dependencies
         run: npm ci

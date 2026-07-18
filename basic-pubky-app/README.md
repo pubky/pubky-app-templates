@@ -9,7 +9,7 @@ This template focuses on Pubky’s core building blocks. The included vanilla HT
 ## What's Included
 
 - Pubky Ring sign-in with a QR code, magic link button and copy-to-clipboard action.
-- A development-only authentication shortcut that removes sign-in friction during local testing. It is not intended as a pattern for production apps.
+- A development-only authentication shortcut that removes sign-in friction on a local testnet. It is not intended as a pattern for production apps.
 - Session persistence across page reloads, plus sign out.
 - CRUD helpers for data under a configured path on the user’s Homeserver.
 - A live event stream subscription scoped to the configured path.
@@ -30,11 +30,11 @@ npm install
 npm run dev
 ```
 
-Use **Sign in with [Pubky Ring](https://pubkyring.app/)** to authorize an app session. For local testing, use the [Pubky Identity Manager template](https://github.com/pubky/pubky-app-templates/tree/main/pubky-signer-app) as a stand-in or **New identity** to bypass it.
+Use **Sign in with [Pubky Ring](https://pubkyring.app/)** to authorize an app session. For local testnet development, use the [Pubky Identity Manager template](https://github.com/pubky/pubky-app-templates/tree/main/pubky-signer-app) as a stand-in. With `vite dev` and `VITE_PUBKY_TESTNET=true`, **New identity** provides a development auth shortcut.
 
 For complete local Homeserver, testnet, and authentication setup, follow the [Pubky Developer Guide](https://pubky.org/explore/pubkycore/getting-started/).
 
-The [hosted GitHub Pages build](https://pubky.github.io/pubky-app-templates/basic-pubky-app/) sets `VITE_SHOW_DEVELOPMENT_SIGNUP=false`, which hides the development-only new identity helper and keeps Pubky Ring sign-in available.
+The [hosted GitHub Pages build](https://pubky.github.io/pubky-app-templates/basic-pubky-app/) is a production build and exposes only Pubky Ring sign-in.
 
 ## App Settings
 
@@ -46,4 +46,4 @@ export const APP_PATH = `/pub/${APP_CLIENT_ID}/`
 export const APP_CAPABILITIES = `${APP_PATH}:rw`
 ```
 
-Change `APP_CLIENT_ID` first when starting a real app; the path and capabilities are derived from it. The file also centralizes testnet and relay settings, development-signup visibility, and the default Homeserver used by that shortcut.
+Change `APP_CLIENT_ID` first when starting a real app; the path and capabilities are derived from it. The file also centralizes testnet and relay settings.
