@@ -8,7 +8,7 @@ A Vite + TypeScript template for building a Pubky identity manager. It demonstra
 ## What's Included
 
 - Local testnet client by default.
-- Two tabs: **Identity** for keypair and homeserver setup, and **Auth** for Pubky Ring-style approvals.
+- Two pages: **Identity** for keypair and homeserver setup, and **Auth** for Pubky Ring-style approvals.
 - Multiple Pubky identities, with one active identity used for homeserver and auth actions.
 - Identity creation, backup, and recovery using a 12-word recovery phrase.
 - Homeserver signup that attempts open signup first and, when required, generates a signup token through the configured admin endpoint.
@@ -34,9 +34,9 @@ npm run dev
 
 For complete local Homeserver, testnet, and authentication setup, follow the [Pubky Developer Guide](https://pubky.org/explore/pubkycore/getting-started/).
 
-Open the identity manager on the **Identity** tab. The left side creates and imports identities with recovery phrases; the right side shows active identity details, signs the active identity up to a homeserver, and publishes its PKARR homeserver record. The Homeserver and admin defaults match `pubky-testnet`.
+Open the identity manager on the **Identity** page. The left side creates and imports identities with recovery phrases; the right side shows active identity details, signs the active identity up to a homeserver, and publishes its PKARR homeserver record. The Homeserver and admin defaults match `pubky-testnet`.
 
-The **Auth** tab receives, previews, and approves app auth requests with the active identity. Load a request by either:
+The **Auth** page receives, previews, and approves app auth requests with the active identity. Load a request by either:
 
 - paste the auth deeplink into **Auth request**, or
 - click **Capture**, choose the browser tab/window containing the QR code, wait for the signer to fill the auth link, then approve it.
