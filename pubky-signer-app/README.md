@@ -1,26 +1,25 @@
 # Pubky Identity Manager
 
-A Vite + TypeScript template for a local Pubky identity manager.
+> [!WARNING]
+> Browser storage is not safe for production identity management. This template stores recovery phrases and private keys unencrypted in `localStorage` and is intended for demonstration and prototyping only. Do not use it to manage real identities.
 
-It is meant to stand in for Pubky Ring while testing auth flows against local Pubky apps and a local testnet. It accepts pasted auth links and can scan a QR code from another tab via screen capture.
+A Vite + TypeScript template for building a Pubky identity manager. It demonstrates identity creation and import, signup on a Homeserver, and approval of app auth requests.
 
 ## What's Included
 
-- Local testnet Pubky client by default.
+- Local testnet client by default.
 - Two tabs: **Identity** for keypair and homeserver setup, and **Auth** for Pubky Ring-style approvals.
 - Multiple Pubky identities, with one active identity used for homeserver and auth actions.
-- Pubky identity creation and import.
-- Automatic signup-token fallback: open signup is tried first, then a homeserver invite code is generated and used if required.
-- 12-word recovery phrase import/export for repeatable local testing.
+- Identity creation, backup, and recovery using a 12-word recovery phrase.
+- Homeserver signup that attempts open signup first and, when required, generates a signup token through the configured admin endpoint.
 - `pubkyauth://signin`, `pubkyauth://signup`, `pubkyring://signin`, and `pubkyring://signup` parsing through `@synonymdev/pubky`.
 - Pasted auth link approval using `Signer.approveAuthRequest()`.
 - Screen capture QR scanning with the browser `BarcodeDetector` API.
-- Dependabot updates for npm dependencies and the Pubky stack.
+- Preconfigured weekly Dependabot updates for all npm dependencies, with Pubky stack packages grouped together.
 
 ## What's Not Included
 
-- Production key custody.
-- Mobile deeplink registration.
+- Native app packaging and deeplink handling.
 - A camera QR scanner.
 - A UI framework.
 
@@ -33,77 +32,22 @@ npm install
 npm run dev
 ```
 
-Run a local Pubky testnet in another terminal:
+For complete local Homeserver, testnet, and authentication setup, follow the [Pubky Developer Guide](https://pubky.org/explore/pubkycore/getting-started/).
 
-```bash
-cargo install pubky-testnet
-pubky-testnet
-```
+Open the identity manager on the **Identity** tab. The left side creates and imports identities with recovery phrases; the right side shows active identity details, signs the active identity up to a homeserver, and publishes its PKARR homeserver record. The Homeserver and admin defaults match `pubky-testnet`.
 
-Open the identity manager on the **Identity** tab. The left side creates and imports identities with recovery phrases; the right side shows active identity details, signs the active identity up to a homeserver, and publishes its PKARR homeserver record. The default homeserver is the local testnet homeserver, and the default admin settings match `pubky-testnet`.
-
-Then move to the **Auth** tab and start the app you want to test. Auth requests are approved with the active identity. When that app shows a Pubky Ring auth QR code, either:
+The **Auth** tab receives, previews, and approves app auth requests with the active identity. Load a request by either:
 
 - paste the auth deeplink into **Auth request**, or
 - click **Capture**, choose the browser tab/window containing the QR code, wait for the signer to fill the auth link, then approve it.
 
+Screen capture requires a secure browser context with `getDisplayMedia()` and `BarcodeDetector`; paste the auth link when unavailable.
+
 The app requesting auth should resolve its pending auth flow once the signer approves the request.
 
-## Local Testnet
+## Network Configuration
 
-This template defaults to the local testnet client:
+The template uses the local testnet by default and resolves Homeserver Pubkys through its local PKARR relay.
 
-```ts
-Pubky.testnet()
-```
-
-Optional environment variables:
-
-```bash
-VITE_PUBKY_TESTNET_HOST=localhost
-VITE_PUBKY_TESTNET=false
-```
-
-Set `VITE_PUBKY_TESTNET=false` only when you intentionally want mainnet defaults.
-
-Mainnet mode defaults to the production homeserver:
-
-```text
-8um71us3fyw6h8wbcxb5ar3rwusy1a6u49956ikzojg3gcwd1dty
-```
-
-Its PKDNS record advertises the browser-compatible `homeserver.pubky.app` endpoint. The Pubky SDK
-resolves that transport from the homeserver public key, so no production admin URL or password is
-configured in this template.
-
-Default testnet homeserver:
-
-```text
-8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo
-```
-
-Default testnet homeserver admin endpoint:
-
-```text
-http://127.0.0.1:6288
-```
-
-Default testnet homeserver admin password:
-
-```text
-admin
-```
-
-## Signup Tokens
-
-Signup does not require a manual invite-code step. The signer first calls `signer.signup(homeserver, null)`. If the homeserver rejects open signup, it calls `GET /generate_signup_token` on the configured homeserver admin URL with `X-Admin-Password`, then retries signup with the generated token.
-
-## Browser Notes
-
-Screen QR scanning uses `navigator.mediaDevices.getDisplayMedia()` and `BarcodeDetector`.
-
-Chrome and Edge support this flow on `localhost`. If your browser does not expose `BarcodeDetector`, paste the auth deeplink instead.
-
-## Security Notes
-
-This template stores recovery phrases and derived identity secrets in `localStorage` for local developer convenience. Do not use that storage pattern for a production signer or a real user wallet.
+- Set `VITE_PUBKY_TESTNET_HOST` when the testnet runs somewhere other than `localhost`.
+- Set `VITE_PUBKY_TESTNET=false` to use the mainnet client without preconfigured Homeserver or admin settings.

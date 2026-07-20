@@ -261,6 +261,7 @@ function homeserverView(identity: SignerIdentity) {
             name="homeserver"
             autocomplete="off"
             value="${escapeHtml(homeserver)}"
+            required
           />
         </label>
         <label>

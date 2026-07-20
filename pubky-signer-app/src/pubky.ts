@@ -6,9 +6,8 @@ import { wordlist as englishWordlist } from '@scure/bip39/wordlists/english.js'
 const TESTNET_HOMESERVER = '8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo'
 const TESTNET_HOMESERVER_ADMIN_URL = `http://${import.meta.env.VITE_PUBKY_TESTNET_HOST || '127.0.0.1'}:6288`
 const TESTNET_HOMESERVER_ADMIN_PASSWORD = 'admin'
-const PRODUCTION_HOMESERVER = '8um71us3fyw6h8wbcxb5ar3rwusy1a6u49956ikzojg3gcwd1dty'
 const IS_TESTNET = import.meta.env.VITE_PUBKY_TESTNET !== 'false'
-export const DEFAULT_HOMESERVER = IS_TESTNET ? TESTNET_HOMESERVER : PRODUCTION_HOMESERVER
+export const DEFAULT_HOMESERVER = IS_TESTNET ? TESTNET_HOMESERVER : ''
 export const DEFAULT_HOMESERVER_ADMIN_URL = IS_TESTNET ? TESTNET_HOMESERVER_ADMIN_URL : ''
 export const DEFAULT_HOMESERVER_ADMIN_PASSWORD = IS_TESTNET ? TESTNET_HOMESERVER_ADMIN_PASSWORD : ''
 
