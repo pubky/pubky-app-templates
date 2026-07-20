@@ -2,7 +2,7 @@
 
 Starter templates for building Pubky apps.
 
-Live examples are published at
+Live previews are published at
 [pubky.github.io/pubky-app-templates](https://pubky.github.io/pubky-app-templates/).
 
 ## Templates
