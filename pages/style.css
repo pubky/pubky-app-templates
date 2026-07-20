@@ -18,8 +18,6 @@ main {
   padding: 5rem 0 2rem;
 }
 
-.hero { max-width: 720px; }
-
 h1 {
   margin: 0;
   font-size: clamp(2.5rem, 8vw, 5rem);
@@ -28,7 +26,6 @@ h1 {
 }
 
 .intro {
-  max-width: 620px;
   margin: 1.5rem 0 0;
   color: #52606d;
   font-size: 1.12rem;
