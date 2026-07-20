@@ -62,10 +62,13 @@ export function createIdentity() {
   return saveIdentity(keypairFromRecoveryPhrase(recoveryPhrase), undefined, recoveryPhrase)
 }
 
-export function importIdentity(recoveryPhraseInput: string, homeserver?: string) {
+export async function importIdentity(recoveryPhraseInput: string, homeserver?: string) {
   const recoveryPhrase = normalizeRecoveryPhrase(recoveryPhraseInput)
   const keypair = keypairFromRecoveryPhrase(recoveryPhrase)
-  return saveIdentity(keypair, homeserver, recoveryPhrase)
+  const resolvedHomeserver =
+    normalizedOptional(homeserver) || (await pubky.getHomeserverOf(keypair.publicKey))?.toString()
+
+  return saveIdentity(keypair, resolvedHomeserver, recoveryPhrase)
 }
 
 export function restoreSavedIdentities() {

@@ -486,7 +486,7 @@ async function handleImportIdentity(form: HTMLFormElement) {
   const recoveryPhrase = formValue(formData, 'recoveryPhrase')
 
   await run('Importing identity...', async () => {
-    setActiveIdentity(importIdentity(recoveryPhrase))
+    setActiveIdentity(await importIdentity(recoveryPhrase))
     setNotice('Identity imported.')
   })
 }
