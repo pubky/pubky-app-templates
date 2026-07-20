@@ -156,7 +156,6 @@ textarea { min-height: 5rem; resize: vertical; }
 .details dt { font-size: 0.78rem; font-weight: 750; text-transform: uppercase; }
 .details dd {
   margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .preview { border-top: 1px solid #d7dde5; margin-top: 1rem; padding-top: 1rem; }
 
