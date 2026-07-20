@@ -34,7 +34,7 @@ declare global {
 interface ApprovalHistoryItem {
   at: string
   capabilities: string[]
-  kind: string
+  kind: AuthRequestPreview['kind']
   publicKey: string
   relay: string
 }
@@ -55,6 +55,10 @@ interface State {
 
 const app = getAppElement()
 const ACTIVE_IDENTITY_KEY = 'pubky-key-manager:active-identity'
+const dateFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+})
 const savedIdentities = restoreSavedIdentities()
 const state: State = {
   activeIdentityId: restoreActiveIdentityId(savedIdentities),
@@ -69,6 +73,9 @@ let scanDetector: BarcodeDetectorLike | undefined
 let scanTimer: number | undefined
 let scanCanvas: HTMLCanvasElement | undefined
 
+app.addEventListener('click', handleClick)
+app.addEventListener('submit', handleSubmit)
+app.addEventListener('change', handleChange)
 window.addEventListener('hashchange', handleRouteChange)
 
 render()
@@ -91,11 +98,10 @@ function render() {
 
       ${statusView()}
 
-      ${pageView(route)}
+      ${route === 'auth' ? authPage() : identityPage()}
     </main>
   `
 
-  bindEvents()
   attachScanVideo()
 }
 
@@ -106,12 +112,6 @@ function pageNav(route: Route) {
       <a href="#/auth" class="${route === 'auth' ? 'active' : ''}">Auth</a>
     </nav>
   `
-}
-
-function pageView(route: Route) {
-  if (route === 'auth') return authPage()
-
-  return identityPage()
 }
 
 function authPage() {
@@ -221,8 +221,6 @@ function identitySettingsView(identity: SignerIdentity) {
 }
 
 function localIdentityView(identity: SignerIdentity) {
-  const copyDisabled = disabledAttr() || (!identity.recoveryPhrase ? 'disabled' : '')
-
   return `
     <div class="stack identity-details">
       <h2>Identity details</h2>
@@ -241,7 +239,7 @@ function localIdentityView(identity: SignerIdentity) {
         </div>
       </dl>
       <div class="button-row">
-        <button id="copy-recovery-phrase" type="button" ${copyDisabled}>
+        <button id="copy-recovery-phrase" type="button" ${disabledAttr(!identity.recoveryPhrase)}>
           Copy recovery phrase
         </button>
         <button id="forget-identity" type="button" ${disabledAttr()}>Forget identity</button>
@@ -251,7 +249,6 @@ function localIdentityView(identity: SignerIdentity) {
 }
 
 function homeserverView(identity: SignerIdentity) {
-  const actionDisabled = disabledAttr()
   const homeserver = identity.homeserver || DEFAULT_HOMESERVER
 
   return `
@@ -284,8 +281,8 @@ function homeserverView(identity: SignerIdentity) {
           />
         </label>
         <div class="button-row">
-          <button type="submit" name="action" value="signup" ${actionDisabled}>Sign up</button>
-          <button type="submit" name="action" value="publish" ${actionDisabled}>
+          <button type="submit" name="action" value="signup" ${disabledAttr()}>Sign up</button>
+          <button type="submit" name="action" value="publish" ${disabledAttr()}>
             Publish PKARR
           </button>
         </div>
@@ -296,7 +293,6 @@ function homeserverView(identity: SignerIdentity) {
 
 function authView() {
   const identity = activeIdentity()
-  const authDisabled = disabledAttr() || (!identity?.homeserver ? 'disabled' : '')
 
   return `
     <section class="panel auth-panel">
@@ -312,7 +308,7 @@ function authView() {
           <textarea name="auth" rows="7" spellcheck="false">${escapeHtml(state.authInput)}</textarea>
         </label>
         <div class="button-row">
-          <button type="submit" ${authDisabled}>Approve request</button>
+          <button type="submit" ${disabledAttr(!identity?.homeserver)}>Approve request</button>
           <button id="preview-auth" type="button" ${disabledAttr()}>Preview</button>
         </div>
       </form>
@@ -415,57 +411,66 @@ function historyItemView(item: ApprovalHistoryItem) {
   `
 }
 
-function bindEvents() {
-  document.querySelector('#create-identity-form')?.addEventListener('submit', (event) => {
-    event.preventDefault()
-    void handleCreateIdentity()
-  })
+function handleClick(event: MouseEvent) {
+  const target = event.target
+  if (!(target instanceof Element)) return
 
-  document.querySelector('#import-identity-form')?.addEventListener('submit', (event) => {
-    event.preventDefault()
-    void handleImportIdentity(event.currentTarget as HTMLFormElement)
-  })
+  const button = target.closest<HTMLButtonElement>('button')
+  if (!button || button.disabled) return
 
-  document.querySelector('#identity-actions-form')?.addEventListener('submit', (event) => {
-    event.preventDefault()
-    void handleIdentityAction(event.currentTarget as HTMLFormElement, event as SubmitEvent)
-  })
+  switch (button.id) {
+    case 'forget-identity':
+      void handleForgetIdentity()
+      break
+    case 'copy-recovery-phrase':
+      void handleCopyRecoveryPhrase()
+      break
+    case 'preview-auth':
+      handlePreviewAuth()
+      break
+    case 'clear-auth':
+      state.authInput = ''
+      state.authRequest = undefined
+      clearStatus()
+      render()
+      break
+    case 'start-scan':
+      void handleStartScan()
+      break
+    case 'stop-scan':
+      stopScreenCapture('Screen capture stopped.')
+      break
+  }
+}
 
-  document.querySelector('#identity-select-form select')?.addEventListener('change', (event) => {
-    handleSelectIdentity(event.currentTarget as HTMLSelectElement)
-  })
+function handleSubmit(event: SubmitEvent) {
+  const form = event.target
+  if (!(form instanceof HTMLFormElement)) return
 
-  document.querySelector('#forget-identity')?.addEventListener('click', () => {
-    handleForgetIdentity()
-  })
+  event.preventDefault()
+  if (state.busy) return
 
-  document.querySelector('#copy-recovery-phrase')?.addEventListener('click', () => {
-    void handleCopyRecoveryPhrase()
-  })
+  switch (form.id) {
+    case 'create-identity-form':
+      void handleCreateIdentity()
+      break
+    case 'import-identity-form':
+      void handleImportIdentity(form)
+      break
+    case 'identity-actions-form':
+      void handleIdentityAction(form, event)
+      break
+    case 'auth-form':
+      void handleApproveAuth(form)
+      break
+  }
+}
 
-  document.querySelector('#auth-form')?.addEventListener('submit', (event) => {
-    event.preventDefault()
-    void handleApproveAuth(event.currentTarget as HTMLFormElement)
-  })
+function handleChange(event: Event) {
+  const select = event.target
+  if (!(select instanceof HTMLSelectElement) || select.form?.id !== 'identity-select-form') return
 
-  document.querySelector('#preview-auth')?.addEventListener('click', () => {
-    handlePreviewAuth()
-  })
-
-  document.querySelector('#clear-auth')?.addEventListener('click', () => {
-    state.authInput = ''
-    state.authRequest = undefined
-    state.error = undefined
-    render()
-  })
-
-  document.querySelector('#start-scan')?.addEventListener('click', () => {
-    void handleStartScan()
-  })
-
-  document.querySelector('#stop-scan')?.addEventListener('click', () => {
-    stopScreenCapture('Screen capture stopped.')
-  })
+  handleSelectIdentity(select)
 }
 
 async function handleCreateIdentity() {
@@ -486,31 +491,30 @@ async function handleImportIdentity(form: HTMLFormElement) {
 }
 
 async function handleIdentityAction(form: HTMLFormElement, event: SubmitEvent) {
-  const identity = requireIdentity()
   const action = submitterValue(event)
   const formData = new FormData(form)
   const signupSettings = signupSettingsFromForm(formData)
-  const homeserver = signupSettings.homeserver
 
-  if (action === 'signup') {
-    await run('Signing up...', async () => {
+  if (action !== 'signup' && action !== 'publish') {
+    setError(`Unknown identity action: ${action}`)
+    render()
+    return
+  }
+
+  await run(action === 'signup' ? 'Signing up...' : 'Publishing PKARR...', async () => {
+    const identity = requireIdentity()
+
+    if (action === 'signup') {
       const signup = await signUpSavedIdentity(identity, signupSettings)
       setActiveIdentity(signup.identity)
       setNotice(signupNotice(signup.inviteCodeUsed))
-    })
-    return
-  }
+      return
+    }
 
-  if (action === 'publish') {
-    await run('Publishing PKARR...', async () => {
-      await publishHomeserver(identity.keypair, homeserver)
-      setActiveIdentity(saveIdentity(identity.keypair, homeserver))
-      setNotice('PKARR published.')
-    })
-    return
-  }
-
-  throw new Error(`Unknown identity action: ${action}`)
+    await publishHomeserver(identity.keypair, signupSettings.homeserver)
+    setActiveIdentity(saveIdentity(identity.keypair, signupSettings.homeserver))
+    setNotice('PKARR published.')
+  })
 }
 
 function handleSelectIdentity(select: HTMLSelectElement) {
@@ -518,33 +522,33 @@ function handleSelectIdentity(select: HTMLSelectElement) {
   render()
 }
 
-function handleForgetIdentity() {
-  const identity = requireIdentity()
-  deleteIdentity(identity.id)
-  state.identities = state.identities.filter((item) => item.id !== identity.id)
-  setActiveIdentityId(state.identities[0]?.id)
-  setNotice('Identity forgotten.')
-  render()
+async function handleForgetIdentity() {
+  await run('Forgetting identity...', async () => {
+    const identity = requireIdentity()
+    deleteIdentity(identity.id)
+    state.identities = state.identities.filter((item) => item.id !== identity.id)
+    setActiveIdentityId(state.identities[0]?.id)
+    setNotice('Identity forgotten.')
+  })
 }
 
 async function handleCopyRecoveryPhrase() {
-  const identity = requireIdentity()
-  const recoveryPhrase = identity.recoveryPhrase
-  if (!recoveryPhrase) throw new Error('This identity does not have a recovery phrase.')
-
   await run('Copying recovery phrase...', async () => {
+    const recoveryPhrase = requireIdentity().recoveryPhrase
+    if (!recoveryPhrase) throw new Error('This identity does not have a recovery phrase.')
+
     await navigator.clipboard.writeText(recoveryPhrase)
     setNotice('Recovery phrase copied.')
   })
 }
 
 async function handleApproveAuth(form: HTMLFormElement) {
-  const identity = requireSignedUpIdentity()
   const authInput = formValue(new FormData(form), 'auth')
+  state.authInput = authInput
 
   await run('Approving auth request...', async () => {
+    const identity = requireSignedUpIdentity()
     const request = await approveAuthRequest(identity, authInput)
-    state.authInput = authInput
     state.authRequest = request
     state.approvals = [
       {
@@ -566,10 +570,11 @@ function handlePreviewAuth() {
 
   try {
     state.authInput = formValue(new FormData(form), 'auth')
+    state.authRequest = undefined
     state.authRequest = parseAuthRequest(state.authInput)
     setNotice('Auth request parsed.')
   } catch (error) {
-    state.error = formatError(error)
+    setError(error)
   }
 
   render()
@@ -577,13 +582,13 @@ function handlePreviewAuth() {
 
 async function handleStartScan() {
   if (!window.BarcodeDetector) {
-    state.error = 'Screen QR scanning needs BarcodeDetector. Use Chrome or Edge, or paste the link.'
+    setError('Screen QR scanning needs BarcodeDetector. Use Chrome or Edge, or paste the link.')
     render()
     return
   }
 
   if (!navigator.mediaDevices?.getDisplayMedia) {
-    state.error = 'Screen capture is not available in this browser context.'
+    setError('Screen capture is not available in this browser context.')
     render()
     return
   }
@@ -591,24 +596,23 @@ async function handleStartScan() {
   const BarcodeDetector = window.BarcodeDetector
 
   await run('Starting screen capture...', async () => {
-    scanDetector = new BarcodeDetector({ formats: ['qr_code'] })
-    scanStream = await navigator.mediaDevices.getDisplayMedia({
+    const detector = new BarcodeDetector({ formats: ['qr_code'] })
+    const stream = await navigator.mediaDevices.getDisplayMedia({
       audio: false,
       video: { frameRate: { ideal: 8, max: 12 } },
     })
-    scanStream.getVideoTracks().forEach((track) => {
+    stream.getVideoTracks().forEach((track) => {
       track.addEventListener('ended', () => {
         stopScreenCapture('Screen capture ended.')
       })
     })
+    scanDetector = detector
+    scanStream = stream
     state.scanActive = true
     setNotice('Screen capture started.')
   })
 
-  if (state.scanActive) {
-    attachScanVideo()
-    queueScan()
-  }
+  if (state.scanActive) queueScan()
 }
 
 function attachScanVideo() {
@@ -620,8 +624,10 @@ function attachScanVideo() {
   }
 
   void video.play().catch((error: unknown) => {
-    state.error = formatError(error)
-    render()
+    if (!state.scanActive) return
+
+    setError(error)
+    stopScreenCapture()
   })
 }
 
@@ -643,16 +649,21 @@ async function scanScreenFrame() {
 
   try {
     const rawValue = await detectQrValue(video)
+    if (!state.scanActive) return
+
     if (!rawValue) {
       queueScan()
       return
     }
 
     state.authInput = rawValue
+    state.authRequest = undefined
     state.authRequest = parseAuthRequest(rawValue)
     stopScreenCapture('QR found.')
   } catch (error) {
-    state.error = formatError(error)
+    if (!state.scanActive) return
+
+    setError(error)
     stopScreenCapture()
   }
 }
@@ -726,13 +737,13 @@ function restoreActiveIdentityId(identities: SignerIdentity[]) {
 
 async function run(label: string, task: () => Promise<void>) {
   state.busy = label
-  state.error = undefined
+  clearStatus()
   render()
 
   try {
     await task()
   } catch (error) {
-    state.error = formatError(error)
+    setError(error)
   } finally {
     state.busy = undefined
     render()
@@ -756,6 +767,16 @@ function requireSignedUpIdentity() {
 function setNotice(notice: string) {
   state.notice = notice
   state.error = undefined
+}
+
+function setError(error: unknown) {
+  state.error = formatError(error)
+  state.notice = undefined
+}
+
+function clearStatus() {
+  state.error = undefined
+  state.notice = undefined
 }
 
 function scannerStatus() {
@@ -804,16 +825,15 @@ function getAppElement() {
   return element
 }
 
-function disabledAttr() {
-  return state.busy ? 'disabled' : ''
+function disabledAttr(disabled = false) {
+  return state.busy || disabled ? 'disabled' : ''
 }
 
 function formatDate(value: string) {
   if (!value) return ''
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(value))
+
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : dateFormatter.format(date)
 }
 
 function formatError(error: unknown) {

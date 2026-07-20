@@ -3,16 +3,15 @@ import type { Session } from '@synonymdev/pubky'
 import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39'
 import { wordlist as englishWordlist } from '@scure/bip39/wordlists/english.js'
 
-export const TESTNET_HOMESERVER = '8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo'
-export const TESTNET_HOMESERVER_ADMIN_URL = `http://${import.meta.env.VITE_PUBKY_TESTNET_HOST || '127.0.0.1'}:6288`
-export const TESTNET_HOMESERVER_ADMIN_PASSWORD = 'admin'
-export const PRODUCTION_HOMESERVER = '8um71us3fyw6h8wbcxb5ar3rwusy1a6u49956ikzojg3gcwd1dty'
-export const IS_TESTNET = import.meta.env.VITE_PUBKY_TESTNET !== 'false'
+const TESTNET_HOMESERVER = '8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo'
+const TESTNET_HOMESERVER_ADMIN_URL = `http://${import.meta.env.VITE_PUBKY_TESTNET_HOST || '127.0.0.1'}:6288`
+const TESTNET_HOMESERVER_ADMIN_PASSWORD = 'admin'
+const PRODUCTION_HOMESERVER = '8um71us3fyw6h8wbcxb5ar3rwusy1a6u49956ikzojg3gcwd1dty'
+const IS_TESTNET = import.meta.env.VITE_PUBKY_TESTNET !== 'false'
 export const DEFAULT_HOMESERVER = IS_TESTNET ? TESTNET_HOMESERVER : PRODUCTION_HOMESERVER
 export const DEFAULT_HOMESERVER_ADMIN_URL = IS_TESTNET ? TESTNET_HOMESERVER_ADMIN_URL : ''
 export const DEFAULT_HOMESERVER_ADMIN_PASSWORD = IS_TESTNET ? TESTNET_HOMESERVER_ADMIN_PASSWORD : ''
 
-const LEGACY_SIGNER_KEY = 'pubky-signer-template:identity'
 const IDENTITIES_KEY = 'pubky-key-manager:identities'
 
 interface SavedSigner {
@@ -30,7 +29,6 @@ export interface SignerIdentity {
   keypair: Keypair
   publicKey: string
   recoveryPhrase?: string
-  secret: string
 }
 
 export interface SignupSettings {
@@ -56,15 +54,9 @@ export interface AuthRequestPreview {
   url: string
 }
 
-export const pubky = createPubky()
-
-function createPubky() {
-  if (IS_TESTNET) {
-    return Pubky.testnet(import.meta.env.VITE_PUBKY_TESTNET_HOST || undefined)
-  }
-
-  return new Pubky()
-}
+export const pubky = IS_TESTNET
+  ? Pubky.testnet(import.meta.env.VITE_PUBKY_TESTNET_HOST || undefined)
+  : new Pubky()
 
 export function createIdentity() {
   const recoveryPhrase = generateMnemonic(englishWordlist, 128)
@@ -142,13 +134,15 @@ export function parseAuthRequest(input: string): AuthRequestPreview {
 
   for (const candidate of candidates) {
     const signupFirst = candidate.toLowerCase().includes('signup')
-    const first = signupFirst ? tryParseSignup(candidate) : tryParseSignin(candidate)
-    if (first.preview) return first.preview
-    if (first.error) errors.push(first.error)
+    const parsers = signupFirst
+      ? [tryParseSignup, tryParseSignin]
+      : [tryParseSignin, tryParseSignup]
 
-    const second = signupFirst ? tryParseSignin(candidate) : tryParseSignup(candidate)
-    if (second.preview) return second.preview
-    if (second.error) errors.push(second.error)
+    for (const parse of parsers) {
+      const result = parse(candidate)
+      if (result.preview) return result.preview
+      if (result.error) errors.push(result.error)
+    }
   }
 
   throw new Error(errors[0] || 'Expected a Pubky auth deeplink.')
@@ -164,6 +158,8 @@ async function signUpIdentity(keypair: Keypair, settings: SignupSettings) {
       session: await signer.signup(homeserver, null),
     }
   } catch (withoutInviteError) {
+    if (!isSignupTokenRequired(withoutInviteError)) throw withoutInviteError
+
     const signupToken = await generateSignupToken(settings).catch((tokenError: unknown) => {
       throw new Error(
         `Signup without an invite failed (${formatError(withoutInviteError)}), and generating an invite code failed (${formatError(tokenError)}).`,
@@ -281,7 +277,6 @@ function toIdentity(keypair: Keypair, saved: SavedSigner): SignerIdentity {
     keypair,
     publicKey,
     recoveryPhrase: saved.recoveryPhrase,
-    secret: saved.secret,
   }
 }
 
@@ -298,31 +293,7 @@ function restoreSavedSigners() {
     }
   }
 
-  return migrateLegacySigner()
-}
-
-function migrateLegacySigner() {
-  const saved = localStorage.getItem(LEGACY_SIGNER_KEY)
-  if (!saved) return []
-
-  try {
-    const signer = parseSavedSigner(JSON.parse(saved) as unknown)
-    if (!signer) throw new Error('Invalid saved signer')
-
-    const keypair = Keypair.fromSecret(decodeSecret(signer.secret))
-    const migrated = {
-      ...signer,
-      id: keypair.publicKey.toString(),
-    }
-
-    persistSigners([migrated])
-    localStorage.removeItem(LEGACY_SIGNER_KEY)
-
-    return [migrated]
-  } catch {
-    localStorage.removeItem(LEGACY_SIGNER_KEY)
-    return []
-  }
+  return []
 }
 
 function persistSigners(signers: SavedSigner[]) {
@@ -411,8 +382,8 @@ function parseByteArray(value: string) {
 
   return Uint8Array.from(
     parsed.map((byte) => {
-      if (typeof byte !== 'number' || byte < 0 || byte > 255) {
-        throw new Error('Secret byte array values must be numbers from 0 to 255.')
+      if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+        throw new Error('Secret byte array values must be integers from 0 to 255.')
       }
 
       return byte
@@ -423,6 +394,17 @@ function parseByteArray(value: string) {
 function normalizedOptional(value: string | undefined) {
   const trimmed = value?.trim()
   return trimmed || undefined
+}
+
+function isSignupTokenRequired(error: unknown) {
+  if (!(error instanceof Error) || error.name !== 'RequestError') return false
+
+  const data = isRecord(error) ? error.data : undefined
+  return (
+    isRecord(data) &&
+    data.statusCode === 400 &&
+    error.message.toLowerCase().includes('token required')
+  )
 }
 
 function formatError(error: unknown) {
