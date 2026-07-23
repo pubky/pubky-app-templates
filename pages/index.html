@@ -16,59 +16,68 @@
         <h1>Pubky App Templates</h1>
         <p class="intro">
           Small, ready-to-copy starting points for building browser-based Pubky apps.
+          <span>Testnet demos connect to a Pubky testnet running on localhost.</span>
         </p>
       </header>
 
       <section class="templates" aria-label="Templates">
         <article class="card">
-          <div class="card-heading">
-            <h2>Basic Pubky App</h2>
-            <span class="badge">Mainnet</span>
-          </div>
+          <h2>Basic Pubky App</h2>
           <p>Ring authentication, session restore, storage CRUD, and event streaming.</p>
           <div class="actions">
-            <a class="primary" href="./basic-pubky-app/">Open demo</a>
-            <a href="https://github.com/pubky/pubky-app-templates/tree/main/basic-pubky-app"
-              >View source</a
+            <h3>Demos</h3>
+            <div class="demo-links">
+              <a href="./mainnet/basic-pubky-app/">Mainnet</a>
+              <a href="./testnet/basic-pubky-app/">Testnet</a>
+            </div>
+            <a
+              class="source"
+              href="https://github.com/pubky/pubky-app-templates/tree/main/basic-pubky-app"
+              >Source <span aria-hidden="true">↗</span></a
             >
           </div>
         </article>
 
         <article class="card">
-          <div class="card-heading">
-            <h2>Vite Starter</h2>
-            <span class="badge neutral">No Pubky</span>
-          </div>
-          <p>A plain Vite and TypeScript starting point used by the Pubky app tutorial.</p>
+          <h2>Identity Manager</h2>
+          <p>
+            Create identities and approve auth requests. Recovery phrases and private keys are
+            stored unencrypted in this browser; use disposable identities only.
+          </p>
           <div class="actions">
-            <a class="primary" href="./vite-starter/">Open demo</a>
-            <a href="https://github.com/pubky/pubky-app-templates/tree/main/vite-starter"
-              >View source</a
+            <h3>Demos</h3>
+            <div class="demo-links">
+              <a href="./mainnet/pubky-signer-app/">Mainnet</a>
+              <a href="./testnet/pubky-signer-app/">Testnet</a>
+            </div>
+            <a
+              class="source"
+              href="https://github.com/pubky/pubky-app-templates/tree/main/pubky-signer-app"
+              >Source <span aria-hidden="true">↗</span></a
             >
           </div>
         </article>
 
-        <article class="card unavailable">
-          <div class="card-heading">
-            <h2>Identity Manager</h2>
-            <span class="badge warning">Local only</span>
-          </div>
-          <p>
-            Not deployed because it stores recovery phrases and identity secrets in browser local
-            storage. Mainly used as a developer tool, not considered safe for production use
-          </p>
-          <div class="actions">
-            <a href="https://github.com/pubky/pubky-app-templates/tree/main/pubky-signer-app"
-              >Run locally from source</a
+        <article class="card">
+          <h2>Vite Starter</h2>
+          <p>A plain Vite and TypeScript starting point used by the Pubky app tutorial.</p>
+          <div class="actions actions--without-title">
+            <div class="demo-links">
+              <a href="./vite-starter/">Demo</a>
+            </div>
+            <a
+              class="source"
+              href="https://github.com/pubky/pubky-app-templates/tree/main/vite-starter"
+              >Source <span aria-hidden="true">↗</span></a
             >
           </div>
         </article>
       </section>
 
       <footer>
-        <a href="https://github.com/pubky/pubky-app-templates">GitHub repository</a>
+        <a href="https://github.com/pubky/pubky-app-templates">GitHub</a>
         <span aria-hidden="true">·</span>
-        <a href="https://pubky.org/">Pubky.org</a>
+        <a href="https://pubky.org/">pubky.org</a>
       </footer>
     </main>
   </body>

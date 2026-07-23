@@ -29,6 +29,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             basic-pubky-app/package-lock.json
+            pubky-signer-app/package-lock.json
             vite-starter/package-lock.json
 
       - name: Configure Pages
@@ -39,10 +40,34 @@ jobs:
         working-directory: basic-pubky-app
 
       - name: Build basic Pubky app for mainnet
-        run: npm run build -- --base ./
+        run: npm run build -- --base ./ --outDir dist/mainnet
         working-directory: basic-pubky-app
         env:
           VITE_PUBKY_TESTNET: 'false'
+
+      - name: Build basic Pubky app for testnet
+        run: npm run build -- --base ./ --outDir dist/testnet
+        working-directory: basic-pubky-app
+        env:
+          VITE_PUBKY_STORAGE_NAMESPACE: 'testnet'
+          VITE_PUBKY_TESTNET: 'true'
+
+      - name: Install Pubky Identity Manager dependencies
+        run: npm ci
+        working-directory: pubky-signer-app
+
+      - name: Build Pubky Identity Manager for mainnet
+        run: npm run build -- --base ./ --outDir dist/mainnet
+        working-directory: pubky-signer-app
+        env:
+          VITE_PUBKY_TESTNET: 'false'
+
+      - name: Build Pubky Identity Manager for testnet
+        run: npm run build -- --base ./ --outDir dist/testnet
+        working-directory: pubky-signer-app
+        env:
+          VITE_PUBKY_STORAGE_NAMESPACE: 'testnet'
+          VITE_PUBKY_TESTNET: 'true'
 
       - name: Install Vite starter dependencies
         run: npm ci
@@ -54,9 +79,17 @@ jobs:
 
       - name: Assemble Pages site
         run: |
-          mkdir -p _site/basic-pubky-app _site/vite-starter
+          mkdir -p \
+            _site/mainnet/basic-pubky-app \
+            _site/mainnet/pubky-signer-app \
+            _site/testnet/basic-pubky-app \
+            _site/testnet/pubky-signer-app \
+            _site/vite-starter
           cp -R pages/. _site/
-          cp -R basic-pubky-app/dist/. _site/basic-pubky-app/
+          cp -R basic-pubky-app/dist/mainnet/. _site/mainnet/basic-pubky-app/
+          cp -R basic-pubky-app/dist/testnet/. _site/testnet/basic-pubky-app/
+          cp -R pubky-signer-app/dist/mainnet/. _site/mainnet/pubky-signer-app/
+          cp -R pubky-signer-app/dist/testnet/. _site/testnet/pubky-signer-app/
           cp -R vite-starter/dist/. _site/vite-starter/
 
       - name: Upload Pages artifact

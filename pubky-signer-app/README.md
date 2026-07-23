@@ -51,3 +51,5 @@ The template uses the local testnet by default and resolves Homeserver Pubkys th
 
 - Set `VITE_PUBKY_TESTNET_HOST` when the testnet runs somewhere other than `localhost`.
 - Set `VITE_PUBKY_TESTNET=false` to use the mainnet client without preconfigured Homeserver or admin settings.
+- Set `VITE_PUBKY_STORAGE_NAMESPACE` when multiple builds share an origin and should keep their
+  saved identities separate.

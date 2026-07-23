@@ -4,17 +4,19 @@ Starter templates for building Pubky apps.
 
 Live previews are published at
 [pubky.github.io/pubky-app-templates](https://pubky.github.io/pubky-app-templates/).
+The Basic Pubky App and Pubky Identity Manager are both available as mainnet and local testnet
+builds.
 
 ## Templates
 
 - [basic-pubky-app](basic-pubky-app/) - Minimal Vite + TypeScript app with auth, storage, and event streaming:
   `npx tiged pubky/pubky-app-templates/basic-pubky-app my-pubky-app`
 
-- [pubky-signer-app](pubky-signer-app/) - Pubky Identity Manager template for testing Pubky Ring auth flows against local Pubky apps:
+- [pubky-signer-app](pubky-signer-app/) - Pubky Identity Manager template for testing Pubky Ring auth flows:
   `npx tiged pubky/pubky-app-templates/pubky-signer-app pubky-signer-app`
 
-  This template is not hosted on GitHub Pages because it stores recovery phrases and identity
-  secrets in browser local storage. Run it locally for development and testing.
+  Hosted builds store recovery phrases and identity secrets unencrypted in browser local storage.
+  Use disposable identities only.
 
 - [vite-starter](vite-starter/) - Plain Vite + TypeScript starter for tutorial. No Pubky aspects included:
   `npx tiged pubky/pubky-app-templates/vite-starter my-pubky-app`

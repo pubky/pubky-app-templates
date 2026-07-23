@@ -34,7 +34,10 @@ Use **Sign in with [Pubky Ring](https://pubkyring.app/)** to authorize an app se
 
 For complete local Homeserver, testnet, and authentication setup, follow the [Pubky Developer Guide](https://pubky.org/explore/pubkycore/getting-started/).
 
-The [hosted GitHub Pages build](https://pubky.github.io/pubky-app-templates/basic-pubky-app/) is a production build and exposes only Pubky Ring sign-in.
+The hosted GitHub Pages builds are available for
+[mainnet](https://pubky.github.io/pubky-app-templates/mainnet/basic-pubky-app/) and a
+[local testnet](https://pubky.github.io/pubky-app-templates/testnet/basic-pubky-app/). Both are
+production builds and expose only Pubky Ring sign-in.
 
 ## App Settings
 
@@ -47,3 +50,6 @@ export const APP_CAPABILITIES = `${APP_PATH}:rw`
 ```
 
 Change `APP_CLIENT_ID` first when starting a real app; the path and capabilities are derived from it. The file also centralizes testnet and relay settings.
+
+Set `VITE_PUBKY_STORAGE_NAMESPACE` when multiple builds share an origin and should keep their saved
+sessions separate.

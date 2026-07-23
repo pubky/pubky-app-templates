@@ -11,7 +11,12 @@ export const DEFAULT_HOMESERVER = IS_TESTNET ? TESTNET_HOMESERVER : ''
 export const DEFAULT_HOMESERVER_ADMIN_URL = IS_TESTNET ? TESTNET_HOMESERVER_ADMIN_URL : ''
 export const DEFAULT_HOMESERVER_ADMIN_PASSWORD = IS_TESTNET ? TESTNET_HOMESERVER_ADMIN_PASSWORD : ''
 
-const IDENTITIES_KEY = 'pubky-key-manager:identities'
+const STORAGE_NAMESPACE = import.meta.env.VITE_PUBKY_STORAGE_NAMESPACE?.trim()
+const IDENTITIES_KEY = identityManagerStorageKey('pubky-key-manager:identities')
+
+export function identityManagerStorageKey(key: string) {
+  return STORAGE_NAMESPACE ? `${STORAGE_NAMESPACE}:${key}` : key
+}
 
 interface SavedSigner {
   createdAt: string

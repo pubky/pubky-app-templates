@@ -1,8 +1,17 @@
 import { AuthFlowKind, Keypair, Pubky, PublicKey } from '@synonymdev/pubky'
 import type { AuthFlow, Session } from '@synonymdev/pubky'
-import { APP_CAPABILITIES, APP_CLIENT_ID, HTTP_RELAY, IS_TESTNET, TESTNET_HOST } from './config'
+import {
+  APP_CAPABILITIES,
+  APP_CLIENT_ID,
+  HTTP_RELAY,
+  IS_TESTNET,
+  STORAGE_NAMESPACE,
+  TESTNET_HOST,
+} from './config'
 
-const SESSION_KEY = `${APP_CLIENT_ID}:session`
+const SESSION_KEY = STORAGE_NAMESPACE
+  ? `${STORAGE_NAMESPACE}:${APP_CLIENT_ID}:session`
+  : `${APP_CLIENT_ID}:session`
 const RING_AUTH_CANCELED_ERROR_NAME = 'RingAuthCanceled'
 const RING_AUTH_EXPIRED_ERROR_NAME = 'RingAuthExpired'
 const RING_AUTH_POLL_INTERVAL_MS = 1200

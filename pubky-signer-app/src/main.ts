@@ -6,6 +6,7 @@ import {
   approveAuthRequest,
   createIdentity,
   deleteIdentity,
+  identityManagerStorageKey,
   importIdentity,
   parseAuthRequest,
   publishHomeserver,
@@ -54,7 +55,7 @@ interface State {
 }
 
 const app = getAppElement()
-const ACTIVE_IDENTITY_KEY = 'pubky-key-manager:active-identity'
+const ACTIVE_IDENTITY_KEY = identityManagerStorageKey('pubky-key-manager:active-identity')
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: 'medium',
   timeStyle: 'short',
