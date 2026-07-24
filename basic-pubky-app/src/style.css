@@ -64,7 +64,7 @@ textarea { resize: vertical; }
 
 .app-header,
 .section-header,
-.record-list li,
+.file-list li,
 .actions {
   display: flex;
   align-items: center;
@@ -73,7 +73,7 @@ textarea { resize: vertical; }
 
 .app-header,
 .section-header,
-.record-list li {
+.file-list li {
   justify-content: space-between;
 }
 
@@ -83,10 +83,10 @@ textarea { resize: vertical; }
 
 .auth-grid,
 .grid,
-.record-form,
-.record-list,
+.form-grid,
+.file-list,
 .event-list,
-.ring-login,
+.ring-signin,
 .ring-actions {
   display: grid;
   gap: 1rem;
@@ -98,9 +98,9 @@ textarea { resize: vertical; }
   justify-content: center;
 }
 .grid { grid-template-columns: minmax(0, 1fr) minmax(260px, 0.8fr); }
-.stream-panel { grid-column: 1 / -1; }
+.event-stream-panel { grid-column: 1 / -1; }
 
-.ring-login { justify-items: center; }
+.ring-signin { justify-items: center; }
 
 .qr-frame {
   display: grid;
@@ -143,30 +143,30 @@ textarea { resize: vertical; }
   animation: spin 0.8s linear infinite;
 }
 
-.record-form label {
+.form-grid label {
   display: grid;
   gap: 0.35rem;
   font-weight: 600;
 }
 
-.record-list,
+.file-list,
 .event-list {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.record-list li,
+.file-list li,
 .event-list li {
   border-top: 1px solid #d8dde5;
   padding-top: 0.75rem;
 }
 
-.record-list li:first-child,
+.file-list li:first-child,
 .event-list li:first-child { border-top: 0; padding-top: 0; }
 
-.record-list strong,
-.record-list span,
+.file-list strong,
+.file-list span,
 .event-list span,
 .event-list small {
   display: block;
@@ -189,7 +189,7 @@ textarea { resize: vertical; }
 
 .muted,
 .empty,
-.record-list span,
+.file-list span,
 .event-list small {
   color: #667085;
 }
@@ -209,7 +209,7 @@ textarea { resize: vertical; }
 
   .app-header,
   .section-header,
-  .record-list li {
+  .file-list li {
     display: grid;
     align-items: stretch;
   }

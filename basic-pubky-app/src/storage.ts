@@ -2,68 +2,68 @@ import { PubkyResource } from '@synonymdev/pubky'
 import type { Path, Session } from '@synonymdev/pubky'
 import { APP_PATH } from './config'
 
-export interface AppRecord {
+export interface AppFile {
   id: string
   title: string
   body: string
   updatedAt: string
 }
 
-interface RecordInput {
+interface FileInput {
   id?: string
   title: string
   body: string
 }
 
-const RECORDS_DIR = `${APP_PATH}records/` as Path
+const FILES_DIR = `${APP_PATH}files/` as Path
 
-export async function listRecords(session: Session) {
-  const urls = await listRecordUrls(session)
-  const records = await Promise.all(
+export async function listFiles(session: Session) {
+  const urls = await listFileUrls(session)
+  const files = await Promise.all(
     urls
       .filter((url) => url.endsWith('.json'))
-      .map((url) => readRecord(session, PubkyResource.parse(url).path as Path)),
+      .map((url) => readFile(session, PubkyResource.parse(url).path as Path)),
   )
 
-  return records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  return files.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
-async function listRecordUrls(session: Session) {
+async function listFileUrls(session: Session) {
   try {
-    return await session.storage.list(RECORDS_DIR, null, true, 50, true)
+    return await session.storage.list(FILES_DIR, null, true, 50, true)
   } catch (error) {
     if (isNotFound(error)) return []
     throw error
   }
 }
 
-export async function saveRecord(session: Session, input: RecordInput) {
+export async function saveFile(session: Session, input: FileInput) {
   const id = input.id || crypto.randomUUID()
-  const record: AppRecord = {
+  const file: AppFile = {
     id,
     title: input.title.trim() || 'Untitled',
     body: input.body,
     updatedAt: new Date().toISOString(),
   }
 
-  await session.storage.putJson(recordPath(id), record)
-  return record
+  await session.storage.putJson(filePath(id), file)
+  return file
 }
 
-export async function deleteRecord(session: Session, id: string) {
-  await session.storage.delete(recordPath(id))
+export async function deleteFile(session: Session, id: string) {
+  await session.storage.delete(filePath(id))
 }
 
-export function recordPath(id: string) {
-  return `${RECORDS_DIR}${id}.json` as Path
+export function filePath(id: string) {
+  return `${FILES_DIR}${id}.json` as Path
 }
 
-async function readRecord(session: Session, path: Path) {
+async function readFile(session: Session, path: Path) {
   const data = await session.storage.getJson(path)
-  return toAppRecord(data, idFromPath(path))
+  return toAppFile(data, idFromPath(path))
 }
 
-function toAppRecord(data: unknown, fallbackId: string): AppRecord {
+function toAppFile(data: unknown, fallbackId: string): AppFile {
   const value = isRecord(data) ? data : {}
 
   return {

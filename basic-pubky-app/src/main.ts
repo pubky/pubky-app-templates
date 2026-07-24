@@ -3,17 +3,17 @@ import { toCanvas } from 'qrcode'
 import './style.css'
 import { APP_PATH, DEVELOPMENT_SIGNUP_HOMESERVER, SHOW_DEVELOPMENT_SIGNUP } from './config'
 import {
-  createUser,
   isRingAuthCanceled,
   isRingAuthExpired,
   restoreSavedSession,
   saveSession,
   signOut,
-  startRingLogin,
-  type RingLoginFlow,
+  signupDevelopmentUser,
+  startRingAuthFlow,
+  type RingAuthFlow,
 } from './pubky'
-import { startAppEventStream, type AppEventStream, type AppStreamEvent } from './events'
-import { deleteRecord, listRecords, recordPath, saveRecord, type AppRecord } from './storage'
+import { startAppEventStream, type AppEvent, type AppEventStream } from './events'
+import { deleteFile, filePath, listFiles, saveFile, type AppFile } from './storage'
 
 const RING_QR_SIZE = 220
 
@@ -23,15 +23,15 @@ interface State {
   error?: string
   notice?: string
   noticePath?: string
-  records: AppRecord[]
-  ringAuthFlow?: RingLoginFlow
-  ringLogin: RingLoginState
+  files: AppFile[]
+  ringAuthFlow?: RingAuthFlow
+  ringSignin: RingSigninState
   session?: Session
-  stopStream?: () => Promise<void>
-  streamEvents: AppStreamEvent[]
+  stopEventStream?: () => Promise<void>
+  eventStreamEvents: AppEvent[]
 }
 
-interface RingLoginState {
+interface RingSigninState {
   authorizationUrl?: string
   copied?: boolean
   expired?: boolean
@@ -42,9 +42,9 @@ interface RingLoginState {
 const app = getAppElement()
 
 const state: State = {
-  records: [],
-  ringLogin: {},
-  streamEvents: [],
+  eventStreamEvents: [],
+  files: [],
+  ringSignin: {},
 }
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
@@ -65,7 +65,7 @@ async function init() {
     }
   })
 
-  if (!state.session) await refreshRingLogin(Boolean(state.error))
+  if (!state.session) await refreshRingSignin(Boolean(state.error))
 }
 
 function render() {
@@ -83,7 +83,7 @@ function render() {
     </main>
   `
 
-  void renderRingLoginQr()
+  void renderRingSigninQr()
 }
 
 function signedInHeader(session: Session) {
@@ -105,7 +105,7 @@ function statusView() {
 function authView() {
   return `
     <section class="auth-grid ${SHOW_DEVELOPMENT_SIGNUP ? '' : 'ring-only'}">
-      ${ringLoginPanel()}
+      ${ringSigninPanel()}
       ${SHOW_DEVELOPMENT_SIGNUP ? newIdentityPanel() : ''}
     </section>
   `
@@ -116,10 +116,10 @@ function newIdentityPanel() {
     <section class="panel">
       <h2>New identity</h2>
       <p class="muted">
-        Create a new key pair, sign up and sign in on the homeserver, in one go.
+        Create a new keypair, sign up and sign in on the homeserver, in one go.
         Primarily for development, to move through auth quickly.
       </p>
-      <form id="create-user-form" class="record-form">
+      <form id="development-signup-form" class="form-grid">
         <label>
           Homeserver public key
           <input
@@ -135,30 +135,30 @@ function newIdentityPanel() {
   `
 }
 
-function ringLoginPanel() {
-  const { authorizationUrl: authUrl, copied, expired, loading } = state.ringLogin
+function ringSigninPanel() {
+  const { authorizationUrl, copied, expired, loading } = state.ringSignin
   const busy = Boolean(state.busy)
-  const canUseAuthUrl = !busy && Boolean(authUrl) && !loading && !expired
+  const canUseAuthorizationUrl = !busy && Boolean(authorizationUrl) && !loading && !expired
 
   return `
     <section class="panel">
       <div class="section-header">
         <h2>Sign in with Pubky Ring</h2>
-        <button id="refresh-ring-login" type="button" ${disabledAttr(busy || Boolean(loading))}>
+        <button id="refresh-ring-signin" type="button" ${disabledAttr(busy || Boolean(loading))}>
           ${expired ? 'New link' : 'Refresh'}
         </button>
       </div>
-      <div class="ring-login">
+      <div class="ring-signin">
         <div class="qr-frame">
           ${ringQrSlot()}
         </div>
         <div class="ring-actions">
           ${
-            canUseAuthUrl
-              ? `<a class="button-link primary" href="${escapeHtml(authUrl)}">Authorize with Pubky Ring</a>`
+            canUseAuthorizationUrl
+              ? `<a class="button-link primary" href="${escapeHtml(authorizationUrl)}">Authorize with Pubky Ring</a>`
               : `<button type="button" disabled>Authorize with Pubky Ring</button>`
           }
-          <button id="copy-ring-link" type="button" ${disabledAttr(!canUseAuthUrl)}>
+          <button id="copy-authorization-url" type="button" ${disabledAttr(!canUseAuthorizationUrl)}>
             ${copied ? 'Copied' : 'Copy link'}
           </button>
         </div>
@@ -168,7 +168,7 @@ function ringLoginPanel() {
 }
 
 function ringQrSlot() {
-  const { authorizationUrl, expired, loading } = state.ringLogin
+  const { authorizationUrl, expired, loading } = state.ringSignin
 
   if (loading) {
     return ringQrPlaceholder(`
@@ -188,7 +188,7 @@ function ringQrSlot() {
 
   return `
     <canvas
-      id="ring-login-qr"
+      id="ring-signin-qr"
       class="ring-qr"
       width="${RING_QR_SIZE}"
       height="${RING_QR_SIZE}"
@@ -207,90 +207,90 @@ function appView() {
       <section class="panel">
         <div class="section-header">
           <h2>Editor</h2>
-          <button id="new-record" type="button" ${disabledAttr()}>New</button>
+          <button id="new-file" type="button" ${disabledAttr()}>New</button>
         </div>
-        ${recordForm()}
+        ${fileForm()}
       </section>
 
       <section class="panel">
-        <h2>Records</h2>
-        ${recordsList()}
+        <h2>Files</h2>
+        ${filesList()}
       </section>
 
-      <section class="panel stream-panel">
+      <section class="panel event-stream-panel">
         <div class="section-header">
           <div>
-            <h2>Stream</h2>
+            <h2>Event stream</h2>
             <p class="muted">Path filter: ${escapeHtml(APP_PATH)}</p>
           </div>
-          <button id="toggle-stream" type="button" ${disabledAttr()}>
-            ${state.stopStream ? 'Stop' : 'Start'}
+          <button id="toggle-event-stream" type="button" ${disabledAttr()}>
+            ${state.stopEventStream ? 'Stop' : 'Start'}
           </button>
         </div>
-        ${streamEventsList()}
+        ${eventStreamEventsList()}
       </section>
     </section>
   `
 }
 
-function recordForm() {
-  const record = state.records.find((item) => item.id === state.editingId)
+function fileForm() {
+  const file = state.files.find((item) => item.id === state.editingId)
 
   return `
-    <form id="record-form" class="record-form">
+    <form id="file-form" class="form-grid">
       <label>
         Title
-        <input name="title" value="${escapeHtml(record?.title || '')}" autocomplete="off" />
+        <input name="title" value="${escapeHtml(file?.title || '')}" autocomplete="off" />
       </label>
       <label>
         Body
-        <textarea name="body" rows="8">${escapeHtml(record?.body || '')}</textarea>
+        <textarea name="body" rows="8">${escapeHtml(file?.body || '')}</textarea>
       </label>
-      <button type="submit" ${disabledAttr()}>${record ? 'Update' : 'Create'}</button>
+      <button type="submit" ${disabledAttr()}>${file ? 'Update' : 'Create'}</button>
     </form>
   `
 }
 
-function recordsList() {
-  if (state.records.length === 0) {
-    return '<p class="empty">No records yet.</p>'
+function filesList() {
+  if (state.files.length === 0) {
+    return '<p class="empty">No files yet.</p>'
   }
 
   return `
-    <ul class="record-list">
-      ${state.records.map(recordItem).join('')}
+    <ul class="file-list">
+      ${state.files.map(fileItem).join('')}
     </ul>
   `
 }
 
-function recordItem(record: AppRecord) {
+function fileItem(file: AppFile) {
   return `
     <li>
       <div>
-        <strong>${escapeHtml(record.title)}</strong>
-        <span>${escapeHtml(formatDate(record.updatedAt))}</span>
+        <strong>${escapeHtml(file.title)}</strong>
+        <span>${escapeHtml(formatDate(file.updatedAt))}</span>
       </div>
       <div class="actions">
-        <button type="button" data-edit-id="${escapeHtml(record.id)}" ${disabledAttr()}>Edit</button>
-        <button type="button" data-delete-id="${escapeHtml(record.id)}" ${disabledAttr()}>Delete</button>
+        <button type="button" data-edit-id="${escapeHtml(file.id)}" ${disabledAttr()}>Edit</button>
+        <button type="button" data-delete-id="${escapeHtml(file.id)}" ${disabledAttr()}>Delete</button>
       </div>
     </li>
   `
 }
 
-function streamEventsList() {
-  if (state.streamEvents.length === 0) {
+function eventStreamEventsList() {
+  if (state.eventStreamEvents.length === 0) {
     return '<p class="empty">No events yet.</p>'
   }
 
   return `
     <ol class="event-list">
-      ${state.streamEvents.map(streamEventItem).join('')}
+      ${state.eventStreamEvents.map(eventStreamEventItem).join('')}
     </ol>
   `
 }
 
-function streamEventItem(event: AppStreamEvent) {
+function eventStreamEventItem(event: AppEvent) {
   return `
     <li>
       <strong>${escapeHtml(event.type)}</strong>
@@ -315,26 +315,26 @@ function handleClick(event: MouseEvent) {
   }
 
   if (button.dataset.deleteId) {
-    void handleDeleteRecord(button.dataset.deleteId)
+    void handleDeleteFile(button.dataset.deleteId)
     return
   }
 
   switch (button.id) {
-    case 'refresh-ring-login':
-      void refreshRingLogin()
+    case 'refresh-ring-signin':
+      void refreshRingSignin()
       break
-    case 'copy-ring-link':
-      void handleCopyRingLink()
+    case 'copy-authorization-url':
+      void handleCopyAuthorizationUrl()
       break
     case 'sign-out':
       void handleSignOut()
       break
-    case 'new-record':
+    case 'new-file':
       state.editingId = undefined
       render()
       break
-    case 'toggle-stream':
-      void toggleStream()
+    case 'toggle-event-stream':
+      void toggleEventStream()
   }
 }
 
@@ -344,15 +344,15 @@ function handleSubmit(event: SubmitEvent) {
 
   event.preventDefault()
   if (state.busy) return
-  if (form.id === 'create-user-form') void handleCreateUser(form)
-  if (form.id === 'record-form') void handleSaveRecord(form)
+  if (form.id === 'development-signup-form') void handleDevelopmentSignup(form)
+  if (form.id === 'file-form') void handleSaveFile(form)
 }
 
-async function refreshRingLogin(preserveError = false) {
-  const token = Symbol('ring-login')
-  cancelRingLogin()
+async function refreshRingSignin(preserveError = false) {
+  const token = Symbol('ring-signin')
+  cancelRingSignin()
 
-  state.ringLogin = {
+  state.ringSignin = {
     loading: true,
     token,
   }
@@ -360,15 +360,15 @@ async function refreshRingLogin(preserveError = false) {
   render()
 
   try {
-    const flow = startRingLogin()
+    const flow = startRingAuthFlow()
     state.ringAuthFlow = flow
 
-    if (!isActiveRingLogin(token)) {
+    if (!isActiveRingSignin(token)) {
       flow.cancel()
       return
     }
 
-    state.ringLogin = {
+    state.ringSignin = {
       authorizationUrl: flow.authorizationUrl,
       token,
     }
@@ -376,19 +376,19 @@ async function refreshRingLogin(preserveError = false) {
 
     void handleRingApproval(flow, token)
   } catch (error) {
-    if (!isActiveRingLogin(token)) return
+    if (!isActiveRingSignin(token)) return
 
     state.ringAuthFlow = undefined
-    state.ringLogin = {}
+    state.ringSignin = {}
     setError(error)
     render()
   }
 }
 
-async function handleRingApproval(flow: RingLoginFlow, token: symbol) {
+async function handleRingApproval(flow: RingAuthFlow, token: symbol) {
   try {
     const session = await flow.awaitApproval
-    if (!isActiveRingLogin(token)) return
+    if (!isActiveRingSignin(token)) return
 
     state.ringAuthFlow = undefined
     await run('Completing Pubky Ring sign-in...', async () => {
@@ -396,28 +396,28 @@ async function handleRingApproval(flow: RingLoginFlow, token: symbol) {
       await activateSession(session, 'Signed in with Pubky Ring.')
     })
   } catch (error) {
-    if (isRingAuthCanceled(error) || !isActiveRingLogin(token)) return
+    if (isRingAuthCanceled(error) || !isActiveRingSignin(token)) return
 
     state.ringAuthFlow = undefined
-    state.ringLogin = isRingAuthExpired(error) ? { expired: true, token } : {}
+    state.ringSignin = isRingAuthExpired(error) ? { expired: true, token } : {}
     setError(error)
     render()
   }
 }
 
-async function handleCopyRingLink() {
-  const authUrl = state.ringLogin.authorizationUrl
-  if (!authUrl || state.ringLogin.expired) return
+async function handleCopyAuthorizationUrl() {
+  const authorizationUrl = state.ringSignin.authorizationUrl
+  if (!authorizationUrl || state.ringSignin.expired) return
 
   try {
-    await copyTextToClipboard(authUrl)
-    state.ringLogin.copied = true
-    setNotice('Pubky Ring link copied.')
+    await copyTextToClipboard(authorizationUrl)
+    state.ringSignin.copied = true
+    setNotice('Authorization URL copied.')
     render()
 
     window.setTimeout(() => {
-      if (state.ringLogin.authorizationUrl !== authUrl) return
-      state.ringLogin.copied = false
+      if (state.ringSignin.authorizationUrl !== authorizationUrl) return
+      state.ringSignin.copied = false
       render()
     }, 2200)
   } catch (error) {
@@ -426,43 +426,43 @@ async function handleCopyRingLink() {
   }
 }
 
-async function handleCreateUser(form: HTMLFormElement) {
+async function handleDevelopmentSignup(form: HTMLFormElement) {
   const formData = new FormData(form)
   const homeserver = formValue(formData, 'homeserver')
 
   await run('Creating identity...', async () => {
-    const session = await createUser(homeserver)
+    const session = await signupDevelopmentUser(homeserver)
     saveSession(session)
     await activateSession(session, 'Identity created and signed in.')
   })
 }
 
-async function handleSaveRecord(form: HTMLFormElement) {
+async function handleSaveFile(form: HTMLFormElement) {
   const session = requireSession()
   const formData = new FormData(form)
   const title = formValue(formData, 'title')
   const body = formValue(formData, 'body')
 
-  await run('Saving record...', async () => {
-    const record = await saveRecord(session, {
+  await run('Saving file...', async () => {
+    const file = await saveFile(session, {
       id: state.editingId,
       title,
       body,
     })
-    state.editingId = state.editingId ? record.id : undefined
-    setNotice('Record saved:', recordPath(record.id))
-    await refreshRecords()
+    state.editingId = state.editingId ? file.id : undefined
+    setNotice('File saved:', filePath(file.id))
+    await refreshFiles()
   })
 }
 
-async function handleDeleteRecord(id: string) {
+async function handleDeleteFile(id: string) {
   const session = requireSession()
 
-  await run('Deleting record...', async () => {
-    await deleteRecord(session, id)
+  await run('Deleting file...', async () => {
+    await deleteFile(session, id)
     if (state.editingId === id) state.editingId = undefined
-    setNotice('Record deleted:', recordPath(id))
-    await refreshRecords()
+    setNotice('File deleted:', filePath(id))
+    await refreshFiles()
   })
 }
 
@@ -470,75 +470,75 @@ async function handleSignOut() {
   const session = requireSession()
 
   await run('Signing out...', async () => {
-    await stopStream()
+    await stopEventStream()
     await signOut(session)
     state.session = undefined
-    state.records = []
+    state.files = []
     state.editingId = undefined
-    state.streamEvents = []
+    state.eventStreamEvents = []
     setNotice('Signed out.')
   })
 
-  if (!state.session) await refreshRingLogin()
+  if (!state.session) await refreshRingSignin()
 }
 
-async function toggleStream() {
-  if (state.stopStream) {
-    await run('Stopping stream...', async () => {
-      await stopStream()
-      setNotice('Stream stopped.')
+async function toggleEventStream() {
+  if (state.stopEventStream) {
+    await run('Stopping event stream...', async () => {
+      await stopEventStream()
+      setNotice('Event stream stopped.')
     })
     return
   }
 
   const session = requireSession()
-  await run('Starting stream...', async () => {
-    const stream = await startAppEventStream(session, (event) => {
-      state.streamEvents = [event, ...state.streamEvents].slice(0, 12)
+  await run('Starting event stream...', async () => {
+    const eventStream = await startAppEventStream(session, (event) => {
+      state.eventStreamEvents = [event, ...state.eventStreamEvents].slice(0, 12)
       render()
     })
-    state.stopStream = stream.stop
-    watchEventStream(stream)
-    setNotice('Stream started.')
+    state.stopEventStream = eventStream.stop
+    watchEventStream(eventStream)
+    setNotice('Event stream started.')
   })
 }
 
-function watchEventStream(stream: AppEventStream) {
-  void stream.done.then(
-    () => finishEventStream(stream),
-    (error: unknown) => finishEventStream(stream, error),
+function watchEventStream(eventStream: AppEventStream) {
+  void eventStream.done.then(
+    () => finishEventStream(eventStream),
+    (error: unknown) => finishEventStream(eventStream, error),
   )
 }
 
-function finishEventStream(stream: AppEventStream, error?: unknown) {
-  if (state.stopStream !== stream.stop) return
+function finishEventStream(eventStream: AppEventStream, error?: unknown) {
+  if (state.stopEventStream !== eventStream.stop) return
 
-  state.stopStream = undefined
+  state.stopEventStream = undefined
   if (error) setError(error)
-  else setNotice('Stream ended.')
+  else setNotice('Event stream ended.')
   render()
 }
 
-async function stopStream() {
-  const stop = state.stopStream
-  state.stopStream = undefined
+async function stopEventStream() {
+  const stop = state.stopEventStream
+  state.stopEventStream = undefined
   if (stop) await stop()
 }
 
-async function refreshRecords() {
+async function refreshFiles() {
   const session = state.session
   if (!session) return
 
-  state.records = await listRecords(session)
+  state.files = await listFiles(session)
 }
 
-async function renderRingLoginQr() {
-  const canvas = document.querySelector<HTMLCanvasElement>('#ring-login-qr')
-  const authUrl = state.ringLogin.authorizationUrl
-  if (!canvas || !authUrl || state.ringLogin.expired) return
+async function renderRingSigninQr() {
+  const canvas = document.querySelector<HTMLCanvasElement>('#ring-signin-qr')
+  const authorizationUrl = state.ringSignin.authorizationUrl
+  if (!canvas || !authorizationUrl || state.ringSignin.expired) return
 
   try {
-    await toCanvas(canvas, authUrl, {
+    await toCanvas(canvas, authorizationUrl, {
       errorCorrectionLevel: 'M',
       margin: 2,
       width: RING_QR_SIZE,
@@ -553,21 +553,21 @@ async function renderRingLoginQr() {
 }
 
 async function activateSession(session: Session, notice: string) {
-  cancelRingLogin()
-  state.ringLogin = {}
+  cancelRingSignin()
+  state.ringSignin = {}
   state.session = session
   setNotice(notice)
-  await refreshRecords()
+  await refreshFiles()
 }
 
-function cancelRingLogin() {
+function cancelRingSignin() {
   const flow = state.ringAuthFlow
   state.ringAuthFlow = undefined
   flow?.cancel()
 }
 
-function isActiveRingLogin(token: symbol) {
-  return state.ringLogin.token === token
+function isActiveRingSignin(token: symbol) {
+  return state.ringSignin.token === token
 }
 
 function setNotice(notice: string, path?: string) {

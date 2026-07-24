@@ -19,20 +19,20 @@ const RING_AUTH_MAX_POLL_ATTEMPTS = 250
 
 export const pubky = IS_TESTNET ? Pubky.testnet(TESTNET_HOST) : new Pubky()
 
-export interface RingLoginFlow {
+export interface RingAuthFlow {
   authorizationUrl: string
   awaitApproval: Promise<Session>
   cancel: () => void
 }
 
-export async function createUser(homeserver: string) {
+export async function signupDevelopmentUser(homeserver: string) {
   const signer = pubky.signer(Keypair.random())
   const homeserverKey = PublicKey.from(homeserver.trim())
 
   return signer.signup(homeserverKey, null)
 }
 
-export function startRingLogin(): RingLoginFlow {
+export function startRingAuthFlow(): RingAuthFlow {
   const flow = pubky.startAuthFlow(APP_CAPABILITIES, AuthFlowKind.signin(), HTTP_RELAY)
   const approval = awaitRingApproval(flow)
 

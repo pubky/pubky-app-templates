@@ -12,6 +12,6 @@ export const STORAGE_NAMESPACE = import.meta.env.VITE_PUBKY_STORAGE_NAMESPACE?.t
 export const SHOW_DEVELOPMENT_SIGNUP =
   import.meta.env.DEV && IS_TESTNET && import.meta.env.VITE_SHOW_DEVELOPMENT_SIGNUP !== 'false'
 
-// Fixed Homeserver key used by Pubky's local testnet.
+// Fixed homeserver public key used by Pubky's local testnet.
 export const DEVELOPMENT_SIGNUP_HOMESERVER =
   'pubky8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo'
