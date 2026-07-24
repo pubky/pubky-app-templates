@@ -2,7 +2,7 @@ import type { Event as PubkyEvent, Session } from '@synonymdev/pubky'
 import { APP_PATH } from './config'
 import { pubky } from './pubky'
 
-export interface AppStreamEvent {
+export interface AppEvent {
   type: string
   path: string
   cursor: string
@@ -16,15 +16,15 @@ export interface AppEventStream {
 
 export async function startAppEventStream(
   session: Session,
-  onEvent: (event: AppStreamEvent) => void,
+  onEvent: (event: AppEvent) => void,
 ): Promise<AppEventStream> {
-  const stream = await pubky
+  const eventStream = await pubky
     .eventStreamForUser(session.info.publicKey, null)
     .path(APP_PATH)
     .live()
     .subscribe()
 
-  const reader = stream.getReader()
+  const reader = eventStream.getReader()
   let stopped = false
 
   async function read() {
@@ -33,7 +33,7 @@ export async function startAppEventStream(
         const { done, value } = await reader.read()
         if (done) return
 
-        onEvent(toAppStreamEvent(value as PubkyEvent))
+        onEvent(toAppEvent(value as PubkyEvent))
       }
     } finally {
       reader.releaseLock()
@@ -50,7 +50,7 @@ export async function startAppEventStream(
   }
 }
 
-function toAppStreamEvent(event: PubkyEvent): AppStreamEvent {
+function toAppEvent(event: PubkyEvent): AppEvent {
   return {
     type: event.eventType,
     path: event.resource.path,

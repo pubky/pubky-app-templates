@@ -43,7 +43,7 @@ export interface SignupSettings {
 
 export interface SignupResult {
   identity: SignerIdentity
-  inviteCodeUsed: boolean
+  signupTokenUsed: boolean
   session: Session
 }
 
@@ -122,7 +122,7 @@ export async function signUpSavedIdentity(
 
   return {
     identity: saveIdentity(identity.keypair, settings.homeserver),
-    inviteCodeUsed: signup.inviteCodeUsed,
+    signupTokenUsed: signup.signupTokenUsed,
     session: signup.session,
   }
 }
@@ -152,7 +152,7 @@ export function parseAuthRequest(input: string): AuthRequestPreview {
     }
   }
 
-  throw new Error(errors[0] || 'Expected a Pubky auth deeplink.')
+  throw new Error(errors[0] || 'Expected a Pubky Auth deep link.')
 }
 
 async function signUpIdentity(keypair: Keypair, settings: SignupSettings) {
@@ -161,28 +161,28 @@ async function signUpIdentity(keypair: Keypair, settings: SignupSettings) {
 
   try {
     return {
-      inviteCodeUsed: false,
+      signupTokenUsed: false,
       session: await signer.signup(homeserver, null),
     }
-  } catch (withoutInviteError) {
-    if (!isSignupTokenRequired(withoutInviteError)) throw withoutInviteError
+  } catch (withoutSignupTokenError) {
+    if (!isSignupTokenRequired(withoutSignupTokenError)) throw withoutSignupTokenError
 
     const signupToken = await generateSignupToken(settings).catch((tokenError: unknown) => {
       throw new Error(
-        `Signup without an invite failed (${formatError(withoutInviteError)}), and generating an invite code failed (${formatError(tokenError)}).`,
+        `Signup without a signup token failed (${formatError(withoutSignupTokenError)}), and generating a signup token failed (${formatError(tokenError)}).`,
         { cause: tokenError },
       )
     })
 
     try {
       return {
-        inviteCodeUsed: true,
+        signupTokenUsed: true,
         session: await signer.signup(homeserver, signupToken),
       }
-    } catch (withInviteError) {
+    } catch (withSignupTokenError) {
       throw new Error(
-        `Signup failed without an invite (${formatError(withoutInviteError)}) and with a generated invite (${formatError(withInviteError)}).`,
-        { cause: withInviteError },
+        `Signup failed without a signup token (${formatError(withoutSignupTokenError)}) and with a generated signup token (${formatError(withSignupTokenError)}).`,
+        { cause: withSignupTokenError },
       )
     }
   }
@@ -203,7 +203,7 @@ async function generateSignupToken(settings: SignupSettings) {
   }
 
   const token = (await response.text()).trim()
-  if (!token) throw new Error('Homeserver admin returned an empty invite code.')
+  if (!token) throw new Error('Homeserver admin returned an empty signup token.')
 
   return token
 }
@@ -211,7 +211,7 @@ async function generateSignupToken(settings: SignupSettings) {
 function normalizeAdminUrl(value: string) {
   const adminUrl = normalizedOptional(value) || DEFAULT_HOMESERVER_ADMIN_URL
   if (!adminUrl) {
-    throw new Error('No homeserver admin endpoint is configured for signup-token generation.')
+    throw new Error('No homeserver admin endpoint is configured for signup token generation.')
   }
 
   return adminUrl
@@ -257,7 +257,7 @@ function extractAuthLink(input: string) {
   const link = match ? match[0] : cleanInput
   const trimmed = link.replace(/[),.;]+$/, '')
 
-  if (!trimmed) throw new Error('Paste or scan a Pubky auth link first.')
+  if (!trimmed) throw new Error('Paste or scan a Pubky Auth deep link first.')
   return trimmed
 }
 

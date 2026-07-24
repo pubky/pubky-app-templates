@@ -257,7 +257,7 @@ function homeserverView(identity: SignerIdentity) {
       <h2>Homeserver</h2>
       <form id="identity-actions-form" class="form-grid">
         <label>
-          Homeserver pubky
+          Homeserver public key
           <input
             name="homeserver"
             autocomplete="off"
@@ -306,7 +306,7 @@ function authView() {
 
       <form id="auth-form" class="form-grid">
         <label>
-          Pubky auth link
+          Pubky Auth deep link
           <textarea name="auth" rows="7" spellcheck="false">${escapeHtml(state.authInput)}</textarea>
         </label>
         <div class="button-row">
@@ -509,7 +509,7 @@ async function handleIdentityAction(form: HTMLFormElement, event: SubmitEvent) {
     if (action === 'signup') {
       const signup = await signUpSavedIdentity(identity, signupSettings)
       setActiveIdentity(signup.identity)
-      setNotice(signupNotice(signup.inviteCodeUsed))
+      setNotice(signupNotice(signup.signupTokenUsed))
       return
     }
 
@@ -784,7 +784,7 @@ function clearStatus() {
 function scannerStatus() {
   if (!window.isSecureContext) return 'Screen capture needs a secure browser context.'
   if (!navigator.mediaDevices?.getDisplayMedia) return 'Screen capture unavailable.'
-  if (!window.BarcodeDetector) return 'QR scanning unavailable. Paste the auth link instead.'
+  if (!window.BarcodeDetector) return 'QR scanning unavailable. Paste the deep link instead.'
   return 'Ready.'
 }
 
@@ -806,10 +806,10 @@ function signupSettingsFromForm(formData: FormData): SignupSettings {
   }
 }
 
-function signupNotice(inviteCodeUsed: boolean) {
-  return inviteCodeUsed
-    ? 'Identity signed up with a generated invite code.'
-    : 'Identity signed up without an invite code.'
+function signupNotice(signupTokenUsed: boolean) {
+  return signupTokenUsed
+    ? 'Identity signed up with a generated signup token.'
+    : 'Identity signed up without a signup token.'
 }
 
 function shortPubky(value: string) {
