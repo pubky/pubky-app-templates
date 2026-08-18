@@ -15,7 +15,7 @@
   "devDependencies": {
     "@types/qrcode": "^1.5.6",
     "typescript": "~7.0.2",
-    "vite": "^8.1.5"
+    "vite": "^8.2.1"
   },
   "dependencies": {
     "@synonymdev/pubky": "^0.9.3",
