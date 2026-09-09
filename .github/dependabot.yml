@@ -4,6 +4,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns:
@@ -12,6 +14,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       repo-tools:
         patterns:
@@ -23,6 +27,8 @@ updates:
     directory: /basic-pubky-app
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       pubky-stack:
         patterns:
@@ -33,6 +39,8 @@ updates:
     directory: /vite-starter
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       vite-starter:
         patterns:
