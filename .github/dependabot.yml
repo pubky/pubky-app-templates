@@ -29,6 +29,8 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+      exclude:
+        - '@synonymdev/pubky'
     groups:
       pubky-stack:
         patterns:
