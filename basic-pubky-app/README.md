@@ -32,9 +32,11 @@ npm install
 npm run dev
 ```
 
+Local testnet is the default. Set `VITE_PUBKY_TESTNET=false` to use mainnet.
+
 Use **Sign in with [Pubky Ring](https://pubkyring.app/)** to authorize an app session. For local
 testnet development, the [Pubky Ring Simulator](https://simulator.pubkyring.app) can
-approve sign-in requests. With `vite dev` and `VITE_PUBKY_TESTNET=true`, **New identity** provides a
+approve sign-in requests. With `vite dev` on testnet, **New identity** provides a
 development auth shortcut; the homeserver must run with `signup_mode = "open"`.
 
 For complete local Homeserver, testnet, and authentication setup, follow the [Pubky Developer Guide](https://pubky.org/explore/pubkycore/getting-started/).
