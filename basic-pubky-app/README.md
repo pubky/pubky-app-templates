@@ -1,4 +1,4 @@
-[![Pubky](https://img.shields.io/badge/Pubky-0.12.0-blue)](https://www.npmjs.com/package/@synonymdev/pubky/v/0.12.0)
+[![Pubky](https://img.shields.io/badge/Pubky-0.14.0-blue)](https://www.npmjs.com/package/@synonymdev/pubky/v/0.14.0)
 
 # Basic Pubky App
 
@@ -54,16 +54,12 @@ App-specific configuration lives in `src/config.ts`:
 export const APP_CLIENT_ID = 'template'
 export const APP_PATH = `/pub/${APP_CLIENT_ID}/`
 export const APP_CAPABILITIES = `${APP_PATH}:rw`
+export const MAX_EVENT_BYTES = 8 * 1024
 ```
 
 Change `APP_CLIENT_ID` first when starting a real app; the path and capabilities are derived from it. The file also centralizes testnet and relay settings.
 
-With [Pubky SDK 0.12.0](https://github.com/pubky/pubky-homeserver/releases/tag/v0.12.0),
-keep session storage paths such as `/pub/template/files/` unchanged. The SDK handles
-the new `/storage/{user}/...` transport routes and falls back to legacy addressing
-when the homeserver does not advertise support. Directory listings still return
-`pubky://...` resource URLs; they are not transport URLs. See the versioned
-[storage routing source](https://github.com/pubky/pubky-homeserver/blob/v0.12.0/pubky-sdk/src/client/http_targets/storage.rs).
+`MAX_EVENT_BYTES` sets the event payload limit (8 KiB by default); oversized payloads stop the stream and display an error.
 
 Set `VITE_PUBKY_STORAGE_NAMESPACE` when multiple builds share an origin and should keep their saved
 sessions separate.

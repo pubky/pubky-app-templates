@@ -4,6 +4,9 @@ export const APP_CLIENT_ID = 'template' as const
 export const APP_PATH = `/pub/${APP_CLIENT_ID}/` as const
 export const APP_CAPABILITIES = `${APP_PATH}:rw` as Capabilities
 
+// Events contain resource metadata, not file contents. Bound incoming SSE payloads.
+export const MAX_EVENT_BYTES = 8 * 1024
+
 export const IS_TESTNET = import.meta.env.VITE_PUBKY_TESTNET !== 'false'
 export const TESTNET_HOST = import.meta.env.VITE_PUBKY_TESTNET_HOST || undefined
 export const HTTP_RELAY =

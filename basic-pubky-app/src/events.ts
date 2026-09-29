@@ -1,5 +1,5 @@
 import type { Event as PubkyEvent, Session } from '@synonymdev/pubky'
-import { APP_PATH } from './config'
+import { APP_PATH, MAX_EVENT_BYTES } from './config'
 import { pubky } from './pubky'
 
 export interface AppEvent {
@@ -21,6 +21,7 @@ export async function startAppEventStream(
   const eventStream = await pubky
     .eventStreamForUser(session.info.publicKey, null)
     .path(APP_PATH)
+    .maxEventBytes(MAX_EVENT_BYTES) // optional; SSE payload sizes are uncapped by default.
     .live()
     .subscribe()
 
