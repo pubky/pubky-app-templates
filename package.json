@@ -14,12 +14,12 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "eslint": "^10.10.0",
+    "eslint": "^10.11.0",
     "github-actionlint": "^1.7.12",
     "globals": "^17.12.0",
-    "prettier": "^3.9.7",
+    "prettier": "^3.9.9",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.70.0"
+    "typescript-eslint": "^8.70.1"
   },
   "overrides": {
     "github-actionlint": {
