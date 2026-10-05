@@ -8,7 +8,7 @@ export function storageSpacesHtml(space: StorageSpace, busy?: string) {
         <button type="button" data-storage-space="public" aria-pressed="${space === 'public'}" ${disabledAttr(Boolean(busy))}>Public storage</button>
         <button type="button" data-storage-space="private" aria-pressed="${space === 'private'}" ${disabledAttr(Boolean(busy))}>Private storage</button>
       </div>
-      <p id="space-description" class="muted">${space === 'public' ? 'Anyone can read.' : 'Authorized apps only. Unencrypted.'}</p>
+      <p id="space-description" class="muted">${space === 'public' ? 'Anyone can read.' : 'Authorized apps only.'}</p>
     </section>
   `
 }
