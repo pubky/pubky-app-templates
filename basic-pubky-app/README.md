@@ -81,3 +81,7 @@ Change `APP_CLIENT_ID` first when starting a real app; the paths and capabilitie
 
 Set `VITE_PUBKY_STORAGE_NAMESPACE` when multiple builds share an origin and should keep their saved
 sessions separate.
+
+## Checks
+
+Run `npm test` for storage and capability regressions. These tests use the existing Vite tooling and Node's test runner; they do not need a running Homeserver. Run `npm run build` to type-check and build the app.

@@ -422,19 +422,14 @@ async function connectEventStream() {
   const session = requireSession()
   const space = state.space
   requireStorageAccess(session, space)
-  let current: AppEventStream | undefined = undefined
-  const eventStream = await startAppEventStream(session, space, (event) => {
-    if (
-      !current ||
-      state.stopEventStream !== current.stop ||
-      state.space !== space ||
-      state.session !== session
-    )
-      return
+  let eventStream: AppEventStream | undefined = undefined
+  eventStream = await startAppEventStream(session, space, (event) => {
+    if (state.space !== space || state.session !== session) return
+    // Buffered events can arrive before the subscription handle is returned.
+    if (eventStream && state.stopEventStream !== eventStream.stop) return
     state.eventStreamEvents = [event, ...state.eventStreamEvents].slice(0, 12)
     updateEventList(state.eventStreamEvents)
   })
-  current = eventStream
   state.stopEventStream = eventStream.stop
   watchEventStream(eventStream)
   updateEventStreamToggle(true)

@@ -71,6 +71,10 @@ jobs:
         run: npm run audit
         working-directory: ${{ matrix.template }}
 
+      - name: Test
+        run: npm test --if-present
+        working-directory: ${{ matrix.template }}
+
       - name: Build
         run: npm run build
         working-directory: ${{ matrix.template }}

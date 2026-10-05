@@ -2,12 +2,13 @@ import type { Session } from '@synonymdev/pubky'
 import { APP_PATHS, type StorageSpace } from './config'
 
 export function hasStorageAccess(session: Session, space: StorageSpace) {
+  const path = APP_PATHS[space]
+  const capabilities = session.info.capabilities
   return ['r', 'w'].every((action) =>
-    session.info.capabilities.some((capability) => {
+    capabilities.some((capability) => {
       const separator = capability.lastIndexOf(':')
       const scope = capability.slice(0, separator)
       const actions = capability.slice(separator + 1)
-      const path = APP_PATHS[space]
       return (
         separator > 0 &&
         actions.includes(action) &&

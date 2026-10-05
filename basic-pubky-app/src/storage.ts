@@ -17,21 +17,22 @@ interface FileInput {
 
 export async function listFiles(session: Session, space: StorageSpace) {
   const urls = await listFileUrls(session, space)
-  const files = await Promise.all(
-    urls
-      .filter((url) => url.endsWith('.json'))
-      .map((url) => {
-        const resource = PubkyResource.parse(url)
-        const id = idFromPath(resource.path)
-        if (
-          resource.owner.z32() !== session.info.publicKey.z32() ||
-          resource.path !== filePath(space, id)
-        ) {
-          throw new Error('The homeserver returned a file outside the selected folder.')
-        }
-        return readFile(session, filePath(space, id), id)
-      }),
-  )
+  const directory = `${APP_PATHS[space]}files/`
+  const ids = urls
+    .filter((url) => url.endsWith('.json'))
+    .flatMap((url) => {
+      const resource = PubkyResource.parse(url)
+      const id = idFromPath(resource.path)
+      if (
+        resource.owner.z32() !== session.info.publicKey.z32() ||
+        resource.path !== `${directory}${id}.json`
+      ) {
+        throw new Error('The homeserver returned a file outside the selected folder.')
+      }
+      // Other apps or manual uploads may use filenames this template does not support.
+      return isFileId(id) ? [id] : []
+    })
+  const files = await Promise.all(ids.map((id) => readFile(session, filePath(space, id), id)))
 
   return files.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
@@ -87,8 +88,12 @@ export async function deleteFile(session: Session, space: StorageSpace, id: stri
 }
 
 export function filePath(space: StorageSpace, id: string) {
-  if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error('Invalid file ID.')
+  if (!isFileId(id)) throw new Error('Invalid file ID.')
   return `${APP_PATHS[space]}files/${id}.json` as Path
+}
+
+function isFileId(id: string) {
+  return /^[a-zA-Z0-9_-]+$/.test(id)
 }
 
 async function readFile(session: Session, path: Path, id: string) {
@@ -96,12 +101,12 @@ async function readFile(session: Session, path: Path, id: string) {
   return toAppFile(data, id)
 }
 
-function toAppFile(data: unknown, fallbackId: string): AppFile {
+function toAppFile(data: unknown, id: string): AppFile {
   const value = isRecord(data) ? data : {}
 
   return {
     // The filename is authoritative; JSON content must never choose a write/delete path.
-    id: fallbackId,
+    id,
     title: String(value.title || 'Untitled'),
     body: String(value.body || ''),
     updatedAt: String(value.updatedAt || ''),
