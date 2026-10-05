@@ -1,5 +1,7 @@
 import type { Session } from '@synonymdev/pubky'
 import { version as pubkySdkVersion } from '@synonymdev/pubky/package.json'
+import { hasStorageAccess, requireStorageAccess, testPublicAccess } from './access'
+import { type StorageSpace } from './config'
 import {
   isAuthorizeRingLink,
   authViewHtml,
@@ -11,7 +13,14 @@ import {
 } from './auth-ui'
 import { startAppEventStream, type AppEvent, type AppEventStream } from './events'
 import { eventStreamPanelHtml, updateEventList, updateEventStreamToggle } from './events-ui'
-import { editorPanelHtml, filesPanelHtml, updateEditor, updateFilesList } from './files-ui'
+import {
+  editorPanelHtml,
+  filesPanelHtml,
+  updateEditor,
+  updateFilesList,
+  type FileDraft,
+} from './files-ui'
+import { storageSpacesHtml } from './spaces-ui'
 import {
   copyTextToClipboard,
   disabledAttr,
@@ -39,6 +48,8 @@ interface State {
   notice?: string
   noticePath?: string
   files: AppFile[]
+  space: StorageSpace
+  drafts: Partial<Record<StorageSpace, FileDraft & { editingId?: string }>>
   ringAuthFlow?: RingAuthFlow
   ringSignin: RingSigninState
   session?: Session
@@ -49,6 +60,8 @@ interface State {
 const state: State = {
   eventStreamEvents: [],
   files: [],
+  space: 'public',
+  drafts: {},
   ringSignin: {},
 }
 
@@ -89,6 +102,7 @@ function mount() {
   `
 
   void renderRingSigninQr(state.ringSignin)
+  syncControls()
 }
 
 function signedInHeader(session: Session) {
@@ -102,12 +116,19 @@ function signedInHeader(session: Session) {
 
 function signedInViewHtml() {
   return `
+    ${storageSpacesHtml(state.space, state.busy)}
     <section class="grid">
-      ${editorPanelHtml(state.files, state.editingId, state.busy)}
-      ${filesPanelHtml(state.files, state.busy)}
-      ${eventStreamPanelHtml(state.eventStreamEvents, Boolean(state.stopEventStream), state.busy)}
+      ${editorPanelHtml(state.files, state.editingId, state.space, state.busy, state.drafts[state.space])}
+      ${filesPanelHtml(state.files, state.space, state.busy)}
+      ${eventStreamPanelHtml(state.eventStreamEvents, Boolean(state.stopEventStream), state.space, state.busy)}
     </section>
   `
+}
+
+function renderWorkspace() {
+  const view = app.querySelector('#view')
+  if (view) view.innerHTML = signedInViewHtml()
+  syncControls()
 }
 
 function statusHtml() {
@@ -132,6 +153,7 @@ function syncControls() {
   const busy = Boolean(state.busy)
   const loading = Boolean(state.ringSignin.loading)
   const canUse = canUseAuthorizationUrl()
+  const canAccess = !state.session || hasStorageAccess(state.session, state.space)
 
   for (const button of app.querySelectorAll('button')) {
     switch (button.id) {
@@ -142,9 +164,15 @@ function syncControls() {
         button.disabled = !canUse
         break
       default:
-        button.disabled = busy
+        button.disabled = busy || (!canAccess && Boolean(button.closest('.grid')))
         break
     }
+  }
+
+  for (const input of app.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+    '#file-form input, #file-form textarea',
+  )) {
+    input.disabled = busy || !canAccess
   }
 
   updateAuthorizeLink(canUse, state.ringSignin.authorizationUrl)
@@ -162,9 +190,21 @@ function handleClick(event: MouseEvent) {
   const button = target.closest<HTMLButtonElement>('button')
   if (!button || state.busy) return
 
+  const space = button.dataset.storageSpace
+  if (space === 'public' || space === 'private') {
+    if (space !== state.space) void switchStorageSpace(space)
+    return
+  }
+
+  if (button.dataset.testAccessId) {
+    void handleTestPublicAccess(button.dataset.testAccessId)
+    return
+  }
+
   if (button.dataset.editId) {
     state.editingId = button.dataset.editId
-    updateEditor(state.files, state.editingId, state.busy)
+    delete state.drafts[state.space]
+    updateEditor(state.files, state.editingId, state.space, state.busy)
     return
   }
 
@@ -185,7 +225,8 @@ function handleClick(event: MouseEvent) {
       break
     case 'new-file':
       state.editingId = undefined
-      updateEditor(state.files, state.editingId, state.busy)
+      delete state.drafts[state.space]
+      updateEditor(state.files, state.editingId, state.space, state.busy)
       break
     case 'toggle-event-stream':
       void toggleEventStream()
@@ -304,34 +345,43 @@ async function handleDevelopmentSignup(form: HTMLFormElement) {
 
 async function handleSaveFile(form: HTMLFormElement) {
   const session = requireSession()
+  const space = state.space
   const formData = new FormData(form)
   const title = formValue(formData, 'title')
   const body = formValue(formData, 'body')
 
   await run('Saving file...', async () => {
-    const file = await saveFile(session, {
+    requireStorageAccess(session, space)
+    const file = await saveFile(session, space, {
       id: state.editingId,
       title,
       body,
     })
     state.editingId = state.editingId ? file.id : undefined
-    setNotice('File saved:', filePath(file.id))
+    delete state.drafts[space]
+    setNotice('File saved:', filePath(space, file.id))
     await refreshFiles()
-    updateFilesList(state.files, state.busy)
-    updateEditor(state.files, state.editingId, state.busy)
+    updateFilesList(state.files, space, state.busy)
+    updateEditor(state.files, state.editingId, space, state.busy)
   })
 }
 
 async function handleDeleteFile(id: string) {
   const session = requireSession()
+  const space = state.space
+  captureDraft()
 
   await run('Deleting file...', async () => {
-    await deleteFile(session, id)
-    if (state.editingId === id) state.editingId = undefined
-    setNotice('File deleted:', filePath(id))
+    requireStorageAccess(session, space)
+    await deleteFile(session, space, id)
+    if (state.editingId === id) {
+      state.editingId = undefined
+      delete state.drafts[space]
+    }
+    setNotice('File deleted:', filePath(space, id))
     await refreshFiles()
-    updateFilesList(state.files, state.busy)
-    updateEditor(state.files, state.editingId, state.busy)
+    updateFilesList(state.files, space, state.busy)
+    updateEditor(state.files, state.editingId, space, state.busy, state.drafts[space])
   })
 }
 
@@ -344,6 +394,8 @@ async function handleSignOut() {
     state.session = undefined
     state.files = []
     state.editingId = undefined
+    state.drafts = {}
+    state.space = 'public'
     state.eventStreamEvents = []
     setNotice('Signed out.')
   })
@@ -361,18 +413,87 @@ async function toggleEventStream() {
     return
   }
 
-  const session = requireSession()
   await run('Starting event stream...', async () => {
-    const eventStream = await startAppEventStream(session, (event) => {
-      if (state.stopEventStream !== eventStream.stop) return
-      state.eventStreamEvents = [event, ...state.eventStreamEvents].slice(0, 12)
-      updateEventList(state.eventStreamEvents)
-    })
-    state.stopEventStream = eventStream.stop
-    watchEventStream(eventStream)
+    await connectEventStream()
     setNotice('Event stream started.')
   })
   updateEventStreamToggle(Boolean(state.stopEventStream))
+}
+
+async function connectEventStream() {
+  const session = requireSession()
+  const space = state.space
+  requireStorageAccess(session, space)
+  let current: AppEventStream | undefined = undefined
+  const eventStream = await startAppEventStream(session, space, (event) => {
+    if (
+      !current ||
+      state.stopEventStream !== current.stop ||
+      state.space !== space ||
+      state.session !== session
+    )
+      return
+    state.eventStreamEvents = [event, ...state.eventStreamEvents].slice(0, 12)
+    updateEventList(state.eventStreamEvents)
+  })
+  current = eventStream
+  state.stopEventStream = eventStream.stop
+  watchEventStream(eventStream)
+  updateEventStreamToggle(true)
+}
+
+function captureDraft() {
+  const form = app.querySelector<HTMLFormElement>('#file-form')
+  if (!form) return
+  const data = new FormData(form)
+  state.drafts[state.space] = {
+    editingId: state.editingId,
+    title: formValue(data, 'title'),
+    body: formValue(data, 'body'),
+  }
+}
+
+async function switchStorageSpace(space: StorageSpace) {
+  captureDraft()
+  await run(`Opening ${space} files...`, async () => {
+    const wasStreaming = Boolean(state.stopEventStream)
+    await stopEventStream()
+    state.space = space
+    state.files = []
+    state.editingId = state.drafts[space]?.editingId
+    state.eventStreamEvents = []
+    setNotice(`Opened ${space} files. Unsaved drafts stay in their original folder.`)
+    renderWorkspace()
+    await refreshFiles()
+    renderWorkspace()
+    if (wasStreaming) await connectEventStream()
+  })
+}
+
+async function handleTestPublicAccess(id: string) {
+  const session = requireSession()
+  const space = state.space
+  await run('Testing a read without authentication...', async () => {
+    const status = await testPublicAccess(session, space, id)
+    const path = filePath(space, id)
+    if (status >= 200 && status < 300) {
+      if (space === 'private') {
+        throw new Error(
+          `Unexpected: ${path} was readable without authentication (HTTP ${status}). This homeserver did not protect the file.`,
+        )
+      }
+      setNotice(`Public access allowed (HTTP ${status}). Anyone can read this file:`, path)
+    } else if (status === 401 || status === 403) {
+      setNotice(
+        `Public access refused (HTTP ${status}). The homeserver requires authorization to read:`,
+        path,
+      )
+    } else {
+      throw new Error(
+        `Public access test was inconclusive (HTTP ${status}). No access rule was confirmed for ${path}.`,
+      )
+    }
+  })
 }
 
 function watchEventStream(eventStream: AppEventStream) {
@@ -403,13 +524,18 @@ async function refreshFiles() {
   const session = state.session
   if (!session) return
 
-  state.files = await listFiles(session)
+  requireStorageAccess(session, state.space)
+  state.files = await listFiles(session, state.space)
 }
 
 async function activateSession(session: Session, notice: string) {
   cancelRingSignin()
   state.ringSignin = {}
   state.session = session
+  state.space = 'public'
+  state.drafts = {}
+  state.files = []
+  state.editingId = undefined
   setNotice(notice)
   await refreshFiles()
 }
