@@ -48,7 +48,7 @@ production builds and expose only Pubky Ring sign-in.
 
 ## Public and Private Storage
 
-Use **Public /pub** and **Private /priv** to choose where files are stored. Each space has its own file list and editor draft. The editor shows the destination folder for a new file and the full path when editing an existing file.
+Use **Public storage** and **Private storage** to choose where files are stored. Each space has its own file list and editor draft. The editor shows the destination folder for a new file and the full path when editing an existing file.
 
 | Space   | Path                    | Who can read?                                     | Who can write?                       |
 | ------- | ----------------------- | ------------------------------------------------- | ------------------------------------ |
@@ -57,7 +57,7 @@ Use **Public /pub** and **Private /priv** to choose where files are stored. Each
 
 **Private means access-controlled, not encrypted.** Files are stored as unencrypted JSON, so the Homeserver operator can read them. `/priv` does not provide sharing with selected people. Deleting a public file cannot retract copies that were already downloaded.
 
-The selector briefly explains who can read each folder, with more detail under **About**. The event stream follows the selected space: the public stream is readable without a session, while the private stream requires your session and read access. Events contain metadata, not file contents.
+The selector briefly explains who can read each folder. The event stream follows the selected space: the public stream is readable without a session, while the private stream requires your session and read access. Events contain metadata, not file contents.
 
 The template requests read and write access to both app folders during sign-in. If you have a session saved from the public-only template, sign out and authorize the app again to grant access to the private folder.
 

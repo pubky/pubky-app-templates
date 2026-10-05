@@ -43,6 +43,7 @@ import { deleteFile, filePath, listFiles, saveFile, type AppFile } from './stora
 
 interface State {
   busy?: string
+  quietBusy?: boolean
   editingId?: string
   error?: string
   notice?: string
@@ -132,7 +133,9 @@ function renderWorkspace() {
 }
 
 function statusHtml() {
-  if (state.busy) return `<p class="status">${escapeHtml(state.busy)}</p>`
+  if (state.busy) {
+    return state.quietBusy ? '' : `<p class="status">${escapeHtml(state.busy)}</p>`
+  }
   if (state.error) return `<p class="status error">${escapeHtml(state.error)}</p>`
   if (state.notice) return `<p class="status">${statusMessage(state.notice, state.noticePath)}</p>`
   return ''
@@ -450,19 +453,23 @@ function captureDraft() {
 
 async function switchStorageSpace(space: StorageSpace) {
   captureDraft()
-  await run(`Opening ${space} files...`, async () => {
-    const wasStreaming = Boolean(state.stopEventStream)
-    await stopEventStream()
-    state.space = space
-    state.files = []
-    state.editingId = state.drafts[space]?.editingId
-    state.eventStreamEvents = []
-    setNotice('')
-    renderWorkspace()
-    await refreshFiles()
-    renderWorkspace()
-    if (wasStreaming) await connectEventStream()
-  })
+  await run(
+    `Opening ${space} files...`,
+    async () => {
+      const wasStreaming = Boolean(state.stopEventStream)
+      await stopEventStream()
+      state.space = space
+      state.files = []
+      state.editingId = state.drafts[space]?.editingId
+      state.eventStreamEvents = []
+      setNotice('')
+      renderWorkspace()
+      await refreshFiles()
+      renderWorkspace()
+      if (wasStreaming) await connectEventStream()
+    },
+    { quiet: true },
+  )
 }
 
 function watchEventStream(eventStream: AppEventStream) {
@@ -531,9 +538,10 @@ function setError(error: unknown) {
   state.noticePath = undefined
 }
 
-async function run(label: string, task: () => Promise<void>) {
+async function run(label: string, task: () => Promise<void>, options: { quiet?: boolean } = {}) {
   const hadSession = Boolean(state.session)
   state.busy = label
+  state.quietBusy = options.quiet
   state.error = undefined
   updateStatus()
   syncControls()
@@ -544,6 +552,7 @@ async function run(label: string, task: () => Promise<void>) {
     setError(error)
   } finally {
     state.busy = undefined
+    state.quietBusy = undefined
   }
 
   if (Boolean(state.session) !== hadSession) {

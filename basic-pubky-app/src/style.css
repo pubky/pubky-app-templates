@@ -103,7 +103,6 @@ textarea { resize: vertical; }
 .event-stream-panel { grid-column: 1 / -1; }
 
 .storage-spaces {
-  position: relative;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -116,22 +115,7 @@ textarea { resize: vertical; }
   color: #ffffff;
   background: #17202a;
 }
-#space-description { margin: 0; font-size: 0.875rem; }
-.space-details { margin-left: auto; font-size: 0.875rem; }
-.space-details summary { cursor: pointer; }
-.space-help {
-  position: absolute;
-  top: calc(100% + 0.5rem);
-  right: 0;
-  z-index: 1;
-  width: min(100%, 28rem);
-  padding: 1rem;
-  border: 1px solid #d8dde5;
-  border-radius: 6px;
-  background: #ffffff;
-  box-shadow: 0 4px 12px #17202a12;
-}
-.space-help p:last-child { margin-bottom: 0; }
+#space-description { flex: 1 1 15rem; margin: 0; font-size: 0.875rem; }
 .file-destination { overflow-wrap: anywhere; }
 .section-header h2 { margin-bottom: 0; }
 .file-list li { align-items: stretch; flex-direction: column; }
