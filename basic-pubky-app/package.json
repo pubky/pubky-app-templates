@@ -10,7 +10,8 @@
     "audit": "npm audit --audit-level=moderate",
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test tests/*.test.js"
   },
   "devDependencies": {
     "@types/qrcode": "^1.5.6",

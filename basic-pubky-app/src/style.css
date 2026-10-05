@@ -102,6 +102,26 @@ textarea { resize: vertical; }
 .grid { grid-template-columns: minmax(0, 1fr) minmax(260px, 0.8fr); }
 .event-stream-panel { grid-column: 1 / -1; }
 
+.storage-spaces {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-bottom: 1rem;
+}
+.space-buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.space-buttons button[aria-pressed="true"] {
+  border-color: #17202a;
+  color: #ffffff;
+  background: #17202a;
+}
+#space-description { flex: 1 1 15rem; margin: 0; font-size: 0.875rem; }
+.file-destination { overflow-wrap: anywhere; }
+.section-header h2 { margin-bottom: 0; }
+.file-list li { align-items: stretch; flex-direction: column; }
+.file-list strong { overflow-wrap: anywhere; }
+.actions { flex-wrap: wrap; }
+
 .ring-signin { justify-items: center; }
 
 .qr-frame {

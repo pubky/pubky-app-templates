@@ -1,15 +1,17 @@
-import { APP_PATH } from './config'
+import type { StorageSpace } from './config'
 import type { AppEvent } from './events'
 import { disabledAttr, escapeHtml } from './html'
 
-export function eventStreamPanelHtml(events: AppEvent[], streaming: boolean, busy?: string) {
+export function eventStreamPanelHtml(
+  events: AppEvent[],
+  streaming: boolean,
+  space: StorageSpace,
+  busy?: string,
+) {
   return `
-    <section class="panel event-stream-panel">
+    <section class="panel event-stream-panel" aria-label="${space === 'public' ? 'Public' : 'Private'} events">
       <div class="section-header">
-        <div>
-          <h2>Event stream</h2>
-          <p class="muted">Path filter: ${escapeHtml(APP_PATH)}</p>
-        </div>
+        <h2>Events</h2>
         <button id="toggle-event-stream" type="button" ${disabledAttr(Boolean(busy))}>
           ${streaming ? 'Stop' : 'Start'}
         </button>
