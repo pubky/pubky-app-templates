@@ -84,4 +84,4 @@ sessions separate.
 
 ## Checks
 
-Run `npm test` for storage and capability regressions. These tests use the existing Vite tooling and Node's test runner; they do not need a running Homeserver. Run `npm run build` to type-check and build the app.
+Run `npm test` for storage, sign-in capability requests, and permission checks. These tests use the existing Vite tooling and Node's test runner; they do not need a running Homeserver. Run `npm run build` to type-check and build the app.

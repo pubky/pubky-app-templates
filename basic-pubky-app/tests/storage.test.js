@@ -19,7 +19,7 @@ before(async () => {
     root: fileURLToPath(new URL('..', import.meta.url)),
     configFile: false,
     envFile: false,
-    server: { middlewareMode: true, hmr: false, watch: null },
+    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
     appType: 'custom',
     logLevel: 'error',
   })
