@@ -28,8 +28,7 @@ export function editorPanelHtml(
 export function filesPanelHtml(files: AppFile[], space: StorageSpace, busy?: string) {
   return `
     <section class="panel">
-      <h2>${space === 'public' ? 'Public' : 'Private'} files</h2>
-      <p class="muted">Test public access attempts a read without your session.</p>
+      <h2>Files</h2>
       <div id="files-list">${filesListHtml(files, space, busy)}</div>
     </section>
   `
@@ -72,7 +71,7 @@ function fileFormHtml(
 
   return `
     <form id="file-form" class="form-grid">
-      <p class="file-destination muted">${file ? 'File' : 'Destination folder'}: <code>${escapeHtml(destination)}</code></p>
+      <small class="file-destination muted"><code>${escapeHtml(destination)}</code></small>
       <label>
         Title
         <input name="title" value="${escapeHtml(draft?.title ?? file?.title ?? '')}" autocomplete="off" />
@@ -102,14 +101,12 @@ function fileItem(file: AppFile, space: StorageSpace, busy?: string) {
   return `
     <li>
       <div>
-        <strong>${escapeHtml(file.title)}</strong>
+        <strong title="${escapeHtml(filePath(space, file.id))}">${escapeHtml(file.title)}</strong>
         <span>${escapeHtml(formatDate(file.updatedAt))}</span>
-        <code class="file-path">${escapeHtml(filePath(space, file.id))}</code>
       </div>
       <div class="actions">
         <button type="button" data-edit-id="${escapeHtml(file.id)}" ${disabledAttr(Boolean(busy))}>Edit</button>
         <button type="button" data-delete-id="${escapeHtml(file.id)}" ${disabledAttr(Boolean(busy))}>Delete</button>
-        <button type="button" data-test-access-id="${escapeHtml(file.id)}" aria-label="Test public access to ${escapeHtml(file.title)}" ${disabledAttr(Boolean(busy))}>Test public access</button>
       </div>
     </li>
   `

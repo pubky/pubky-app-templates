@@ -12,7 +12,6 @@ This template focuses on Pubky’s core building blocks. The included vanilla HT
 - A development-only authentication shortcut that removes sign-in friction on a local testnet. It requires `signup_mode = "open"` and is not intended as a pattern for production apps.
 - Session persistence across page reloads via the SDK browser session store, plus sign out.
 - Public and private file storage under configured paths on the user’s Homeserver, using the same editor and file operations.
-- A public-access check that attempts to read a saved file without the app’s session.
 - A live event stream subscription scoped to the selected public or private folder.
 - Preconfigured weekly Dependabot updates for all npm dependencies, with Pubky stack packages grouped together.
 
@@ -58,7 +57,7 @@ Use **Public /pub** and **Private /priv** to choose where files are stored. Each
 
 **Private means access-controlled, not encrypted.** Files are stored as unencrypted JSON, so the Homeserver operator can read them. `/priv` does not provide sharing with selected people. Deleting a public file cannot retract copies that were already downloaded.
 
-**Test public access** attempts a read without using your session. Public files should be readable; private files should reject the request. The event stream follows the selected space: the public stream is readable without a session, while the private stream requires your session and read access. Events contain metadata, not file contents.
+The selector briefly explains who can read each folder, with more detail under **About**. The event stream follows the selected space: the public stream is readable without a session, while the private stream requires your session and read access. Events contain metadata, not file contents.
 
 The template requests read and write access to both app folders during sign-in. If you have a session saved from the public-only template, sign out and authorize the app again to grant access to the private folder.
 

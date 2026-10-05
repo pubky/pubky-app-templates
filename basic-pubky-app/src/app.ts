@@ -1,6 +1,6 @@
 import type { Session } from '@synonymdev/pubky'
 import { version as pubkySdkVersion } from '@synonymdev/pubky/package.json'
-import { hasStorageAccess, requireStorageAccess, testPublicAccess } from './access'
+import { hasStorageAccess, requireStorageAccess } from './access'
 import { type StorageSpace } from './config'
 import {
   isAuthorizeRingLink,
@@ -193,11 +193,6 @@ function handleClick(event: MouseEvent) {
   const space = button.dataset.storageSpace
   if (space === 'public' || space === 'private') {
     if (space !== state.space) void switchStorageSpace(space)
-    return
-  }
-
-  if (button.dataset.testAccessId) {
-    void handleTestPublicAccess(button.dataset.testAccessId)
     return
   }
 
@@ -462,37 +457,11 @@ async function switchStorageSpace(space: StorageSpace) {
     state.files = []
     state.editingId = state.drafts[space]?.editingId
     state.eventStreamEvents = []
-    setNotice(`Opened ${space} files. Unsaved drafts stay in their original folder.`)
+    setNotice('')
     renderWorkspace()
     await refreshFiles()
     renderWorkspace()
     if (wasStreaming) await connectEventStream()
-  })
-}
-
-async function handleTestPublicAccess(id: string) {
-  const session = requireSession()
-  const space = state.space
-  await run('Testing a read without authentication...', async () => {
-    const status = await testPublicAccess(session, space, id)
-    const path = filePath(space, id)
-    if (status >= 200 && status < 300) {
-      if (space === 'private') {
-        throw new Error(
-          `Unexpected: ${path} was readable without authentication (HTTP ${status}). This homeserver did not protect the file.`,
-        )
-      }
-      setNotice(`Public access allowed (HTTP ${status}). Anyone can read this file:`, path)
-    } else if (status === 401 || status === 403) {
-      setNotice(
-        `Public access refused (HTTP ${status}). The homeserver requires authorization to read:`,
-        path,
-      )
-    } else {
-      throw new Error(
-        `Public access test was inconclusive (HTTP ${status}). No access rule was confirmed for ${path}.`,
-      )
-    }
   })
 }
 

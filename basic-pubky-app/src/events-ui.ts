@@ -1,4 +1,4 @@
-import { APP_PATHS, type StorageSpace } from './config'
+import type { StorageSpace } from './config'
 import type { AppEvent } from './events'
 import { disabledAttr, escapeHtml } from './html'
 
@@ -9,17 +9,13 @@ export function eventStreamPanelHtml(
   busy?: string,
 ) {
   return `
-    <section class="panel event-stream-panel">
+    <section class="panel event-stream-panel" aria-label="${space === 'public' ? 'Public' : 'Private'} events">
       <div class="section-header">
-        <div>
-          <h2>${space === 'public' ? 'Public' : 'Private'} event stream</h2>
-          <p class="muted">Path filter: <code>${escapeHtml(APP_PATHS[space])}</code></p>
-        </div>
+        <h2>Events</h2>
         <button id="toggle-event-stream" type="button" ${disabledAttr(Boolean(busy))}>
           ${streaming ? 'Stop' : 'Start'}
         </button>
       </div>
-      <p class="muted">${space === 'public' ? 'Anyone can subscribe to changes in this public folder.' : 'This stream uses your session and requires read access to this private folder.'} Events contain file metadata, not file contents.</p>
       <div id="event-list">${eventListHtml(events)}</div>
     </section>
   `
