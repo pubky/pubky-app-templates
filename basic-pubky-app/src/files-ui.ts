@@ -86,7 +86,7 @@ function fileFormHtml(
     <form id="file-form" class="form-grid">
       <fieldset class="write-modes" ${disabledAttr(Boolean(busy))}>
         <legend>Content</legend>
-        <label><input type="radio" name="write-mode" value="note" checked ${disabledAttr(Boolean(busy))} /> Write a note</label>
+        <label><input type="radio" name="write-mode" value="note" checked ${disabledAttr(Boolean(busy))} /> Write a file</label>
         <label><input type="radio" name="write-mode" value="file" ${disabledAttr(Boolean(busy))} /> Choose a file</label>
       </fieldset>
       <fieldset id="note-fields" data-write-mode="note" class="editor-fields" ${disabledAttr(Boolean(busy))}>
