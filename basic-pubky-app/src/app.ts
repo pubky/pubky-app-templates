@@ -11,7 +11,13 @@ import {
   updateRingPanel,
   type RingSigninState,
 } from './auth-ui'
-import { startAppEventStream, type AppEvent, type AppEventStream } from './events'
+import {
+  startAppEventStream,
+  startAppEventHistory,
+  EVENT_HISTORY_LIMIT,
+  type AppEvent,
+  type AppEventStream,
+} from './events'
 import { eventStreamPanelHtml, updateEventList, updateEventStreamToggle } from './events-ui'
 import {
   editorPanelHtml,
@@ -30,6 +36,12 @@ import {
   statusMessage,
 } from './html'
 import {
+  deselectSavedAccount,
+  getSavedSessionId,
+  listSavedAccounts,
+  selectSavedAccount,
+  subscribeSavedSessionChanges,
+  type SavedAccount,
   isRingAuthCanceled,
   isRingAuthExpired,
   restoreSavedSession,
@@ -39,9 +51,28 @@ import {
   startRingAuthFlow,
   type RingAuthFlow,
 } from './pubky'
-import { deleteFile, filePath, listFiles, saveFile, type AppFile } from './storage'
+import {
+  acquireFileLock,
+  renewFileLock,
+  releaseFileLock,
+  downloadFile,
+  publicFileAddress,
+  deleteFile,
+  filePath,
+  listFiles,
+  saveFile,
+  type AppFile,
+  type FileLock,
+} from './storage'
+import { storageToolsPanelHtml, createStorageTools } from './storage-tools'
 
 interface State {
+  revision: number
+  accounts: SavedAccount[]
+  logoutPending: boolean
+  fileLock?: FileLock
+  stopEventHistory?: () => Promise<void>
+  eventCursor?: string
   busy?: string
   quietBusy?: boolean
   editingId?: string
@@ -59,6 +90,9 @@ interface State {
 }
 
 const state: State = {
+  revision: 0,
+  accounts: [],
+  logoutPending: false,
   eventStreamEvents: [],
   files: [],
   space: 'public',
@@ -67,27 +101,62 @@ const state: State = {
 }
 
 let app: HTMLElement
+let toolsPanel: ReturnType<typeof createStorageTools> | undefined
+let activeOperation: symbol | undefined
 
 export function start(root: HTMLElement) {
   app = root
   app.addEventListener('click', handleClick)
   app.addEventListener('submit', handleSubmit)
+  subscribeSavedSessionChanges((change) => {
+    if (change.type === 'accounts') {
+      void refreshSavedAccounts()
+      return
+    }
+    resetWorkspace()
+    setNotice(
+      change.type === 'invalidated'
+        ? 'This session was signed out or removed in another tab.'
+        : 'Account selection changed in another tab.',
+    )
+    mount()
+    void init()
+  })
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) {
+      state.ringAuthFlow = undefined
+      resetWorkspace()
+      mount()
+      void init()
+    }
+  })
+  window.addEventListener('pagehide', () => {
+    state.ringAuthFlow?.suspend()
+    toolsPanel?.dispose()
+    void stopEventStream()
+    void stopEventHistory()
+    void releaseEditorLock()
+  })
   mount()
   void init()
 }
 
 async function init() {
+  const revision = state.revision
   await run('Restoring session...', async () => {
+    await refreshSavedAccounts()
     const session = await restoreSavedSession()
+    if (state.revision !== revision) return
     if (session) {
       await activateSession(session, 'Session restored.')
     }
   })
 
-  if (!state.session) await refreshRingSignin(Boolean(state.error))
+  if (state.revision === revision && !state.session) await refreshRingSignin(Boolean(state.error))
 }
 
 function mount() {
+  toolsPanel?.dispose()
   const session = state.session
 
   app.innerHTML = `
@@ -96,12 +165,14 @@ function mount() {
         <h1>Pubky App Template</h1>
         ${session ? signedInHeader(session) : ''}
       </header>
+      <div id="saved-accounts">${savedAccountsHtml()}</div>
       <div id="status">${statusHtml()}</div>
-      <div id="view">${session ? signedInViewHtml() : authViewHtml(state.ringSignin, state.busy)}</div>
+      <div id="view">${session ? signedInViewHtml() : authViewHtml(state.ringSignin, state.busy) + storageToolsPanelHtml(false, state.space)}</div>
       <footer class="app-footer">Built with <a href="https://www.npmjs.com/package/@synonymdev/pubky">Pubky SDK</a> v${pubkySdkVersion}</footer>
     </main>
   `
 
+  mountStorageTools()
   void renderRingSigninQr(state.ringSignin)
   syncControls()
 }
@@ -109,26 +180,32 @@ function mount() {
 function signedInHeader(session: Session) {
   return `
     <div class="user-block">
-      <button id="sign-out" type="button" ${disabledAttr(Boolean(state.busy))}>Sign out</button>
+      <button id="sign-out" type="button" ${disabledAttr(Boolean(state.busy))}>${state.logoutPending ? 'Retry sign out' : 'Sign out'}</button>
+      <button id="add-account" type="button" ${disabledAttr(Boolean(state.busy))}>Add account</button>
       <p class="pubky-id">${escapeHtml(session.info.publicKey.toString())}</p>
     </div>
   `
 }
 
 function signedInViewHtml() {
+  if (state.logoutPending)
+    return '<p>Sign-out is pending. Retry to finish revoking this session before making more requests.</p>'
   return `
     ${storageSpacesHtml(state.space, state.busy)}
     <section class="grid">
-      ${editorPanelHtml(state.files, state.editingId, state.space, state.busy, state.drafts[state.space])}
+      ${editorPanelHtml(state.files, state.editingId, state.space, state.busy, state.drafts[state.space], state.fileLock)}
       ${filesPanelHtml(state.files, state.space, state.busy)}
       ${eventStreamPanelHtml(state.eventStreamEvents, Boolean(state.stopEventStream), state.space, state.busy)}
     </section>
+    ${storageToolsPanelHtml(true, state.space)}
   `
 }
 
 function renderWorkspace() {
+  toolsPanel?.dispose()
   const view = app.querySelector('#view')
   if (view) view.innerHTML = signedInViewHtml()
+  mountStorageTools()
   syncControls()
 }
 
@@ -159,6 +236,15 @@ function syncControls() {
   const canAccess = !state.session || hasStorageAccess(state.session, state.space)
 
   for (const button of app.querySelectorAll('button')) {
+    if (button.closest('#storage-tools')) continue
+    if (button.dataset.accountId) {
+      button.disabled = busy || button.dataset.accountId === getSavedSessionId()
+      continue
+    }
+    if (button.type === 'submit' && button.closest('#file-form')) {
+      button.disabled = busy || !canAccess || Boolean(state.editingId && !state.fileLock)
+      continue
+    }
     switch (button.id) {
       case 'refresh-ring-signin':
         button.disabled = busy || loading
@@ -191,7 +277,12 @@ function handleClick(event: MouseEvent) {
   }
 
   const button = target.closest<HTMLButtonElement>('button')
-  if (!button || state.busy) return
+  if (!button || state.busy || button.closest('#storage-tools')) return
+  if (button.dataset.accountId) {
+    void switchAccount(button.dataset.accountId)
+    return
+  }
+  if (state.logoutPending && !['sign-out', 'add-account'].includes(button.id)) return
 
   const space = button.dataset.storageSpace
   if (space === 'public' || space === 'private') {
@@ -200,9 +291,23 @@ function handleClick(event: MouseEvent) {
   }
 
   if (button.dataset.editId) {
-    state.editingId = button.dataset.editId
-    delete state.drafts[state.space]
-    updateEditor(state.files, state.editingId, state.space, state.busy)
+    void editFile(button.dataset.editId)
+    return
+  }
+  if (button.dataset.downloadId) {
+    const id = button.dataset.downloadId
+    const revision = state.revision
+    void run('Downloading file...', async () => {
+      await downloadFile(requireSession(), state.space, id, () => state.revision === revision)
+    })
+    return
+  }
+  if (button.dataset.copyId) {
+    const id = button.dataset.copyId
+    void run('Copying public address...', async () => {
+      await copyTextToClipboard(publicFileAddress(requireSession(), id))
+      setNotice('Public address copied.')
+    })
     return
   }
 
@@ -213,7 +318,7 @@ function handleClick(event: MouseEvent) {
 
   switch (button.id) {
     case 'refresh-ring-signin':
-      void refreshRingSignin()
+      void refreshRingSignin(false, true)
       break
     case 'copy-authorization-url':
       void handleCopyAuthorizationUrl()
@@ -221,7 +326,33 @@ function handleClick(event: MouseEvent) {
     case 'sign-out':
       void handleSignOut()
       break
+    case 'add-account':
+      deselectSavedAccount()
+      resetWorkspace()
+      mount()
+      void refreshRingSignin()
+      break
+    case 'renew-file-lock':
+      void renewEditorLock()
+      break
+    case 'release-file-lock':
+      void run('Releasing file lock...', async () => {
+        await releaseEditorLock()
+        updateEditor(
+          state.files,
+          state.editingId,
+          state.space,
+          state.busy,
+          state.drafts[state.space],
+          state.fileLock,
+        )
+      })
+      break
+    case 'load-event-history':
+      void loadEventHistory()
+      break
     case 'new-file':
+      void releaseEditorLock()
       state.editingId = undefined
       delete state.drafts[state.space]
       updateEditor(state.files, state.editingId, state.space, state.busy)
@@ -239,12 +370,12 @@ function handleSubmit(event: SubmitEvent) {
   if (!(form instanceof HTMLFormElement)) return
 
   event.preventDefault()
-  if (state.busy) return
+  if (state.busy || form.closest('#storage-tools') || state.logoutPending) return
   if (form.id === 'development-signup-form') void handleDevelopmentSignup(form)
   if (form.id === 'file-form') void handleSaveFile(form)
 }
 
-async function refreshRingSignin(preserveError = false) {
+async function refreshRingSignin(preserveError = false, fresh = false) {
   const token = Symbol('ring-signin')
   cancelRingSignin()
 
@@ -258,13 +389,12 @@ async function refreshRingSignin(preserveError = false) {
   syncControls()
 
   try {
-    const flow = await startRingAuthFlow()
-    state.ringAuthFlow = flow
-
+    const flow = await startRingAuthFlow({ fresh })
     if (!isActiveRingSignin(token)) {
       flow.cancel()
       return
     }
+    state.ringAuthFlow = flow
 
     state.ringSignin = {
       authorizationUrl: flow.authorizationUrl,
@@ -292,8 +422,10 @@ async function handleRingApproval(flow: RingAuthFlow, token: symbol) {
     if (!isActiveRingSignin(token)) return
 
     state.ringAuthFlow = undefined
+    const revision = state.revision
     await run('Completing Pubky Ring sign-in...', async () => {
-      await saveSession(session)
+      await saveSession(session, () => state.revision === revision)
+      if (state.revision !== revision) return
       await activateSession(session, 'Signed in with Pubky Ring.')
     })
   } catch (error) {
@@ -334,9 +466,12 @@ async function handleDevelopmentSignup(form: HTMLFormElement) {
   const formData = new FormData(form)
   const homeserver = formValue(formData, 'homeserver')
 
+  const revision = state.revision
   await run('Creating identity...', async () => {
     const session = await signupDevelopmentUser(homeserver)
-    await saveSession(session)
+    if (state.revision !== revision) return
+    await saveSession(session, () => state.revision === revision)
+    if (state.revision !== revision) return
     await activateSession(session, 'Identity created and signed in.')
   })
 }
@@ -347,20 +482,31 @@ async function handleSaveFile(form: HTMLFormElement) {
   const formData = new FormData(form)
   const title = formValue(formData, 'title')
   const body = formValue(formData, 'body')
+  const revision = state.revision
+  const editingId = state.editingId
 
   await run('Saving file...', async () => {
     requireStorageAccess(session, space)
-    const file = await saveFile(session, space, {
-      id: state.editingId,
-      title,
-      body,
-    })
+    const file = await saveFile(
+      session,
+      space,
+      {
+        id: editingId,
+        title,
+        body,
+      },
+      state.fileLock,
+    )
+    if (state.revision !== revision) return
+    await releaseEditorLock()
+    if (state.revision !== revision) return
     state.editingId = state.editingId ? file.id : undefined
     delete state.drafts[space]
     setNotice('File saved:', filePath(space, file.id))
     await refreshFiles()
+    if (state.revision !== revision) return
     updateFilesList(state.files, space, state.busy)
-    updateEditor(state.files, state.editingId, space, state.busy)
+    updateEditor(state.files, state.editingId, space, state.busy, undefined, state.fileLock)
   })
 }
 
@@ -368,37 +514,54 @@ async function handleDeleteFile(id: string) {
   const session = requireSession()
   const space = state.space
   captureDraft()
+  const revision = state.revision
 
   await run('Deleting file...', async () => {
     requireStorageAccess(session, space)
-    await deleteFile(session, space, id)
+    await deleteFile(session, space, id, state.fileLock?.id === id ? state.fileLock : undefined)
+    if (state.revision !== revision) return
     if (state.editingId === id) {
+      await releaseEditorLock()
+      if (state.revision !== revision) return
       state.editingId = undefined
       delete state.drafts[space]
     }
     setNotice('File deleted:', filePath(space, id))
     await refreshFiles()
+    if (state.revision !== revision) return
     updateFilesList(state.files, space, state.busy)
-    updateEditor(state.files, state.editingId, space, state.busy, state.drafts[space])
+    updateEditor(
+      state.files,
+      state.editingId,
+      space,
+      state.busy,
+      state.drafts[space],
+      state.fileLock,
+    )
   })
 }
 
 async function handleSignOut() {
-  const session = requireSession()
-
+  const session = state.session
+  if (!session) return
+  state.logoutPending = true
+  toolsPanel?.dispose()
+  state.files = []
+  state.drafts = {}
+  state.eventStreamEvents = []
+  mount()
   await run('Signing out...', async () => {
     await stopEventStream()
+    await stopEventHistory()
+    await releaseEditorLock()
+    if (state.session !== session) return
     await signOut(session)
-    state.session = undefined
-    state.files = []
-    state.editingId = undefined
-    state.drafts = {}
-    state.space = 'public'
-    state.eventStreamEvents = []
+    if (state.session !== session) return
+    resetWorkspace()
     setNotice('Signed out.')
+    mount()
+    await init()
   })
-
-  if (!state.session) await refreshRingSignin()
 }
 
 async function toggleEventStream() {
@@ -413,7 +576,7 @@ async function toggleEventStream() {
 
   await run('Starting event stream...', async () => {
     await connectEventStream()
-    setNotice('Event stream started.')
+    if (state.session) setNotice('Event stream started.')
   })
   updateEventStreamToggle(Boolean(state.stopEventStream))
 }
@@ -421,15 +584,29 @@ async function toggleEventStream() {
 async function connectEventStream() {
   const session = requireSession()
   const space = state.space
+  const revision = state.revision
   requireStorageAccess(session, space)
   let eventStream: AppEventStream | undefined = undefined
-  eventStream = await startAppEventStream(session, space, (event) => {
-    if (state.space !== space || state.session !== session) return
-    // Buffered events can arrive before the subscription handle is returned.
-    if (eventStream && state.stopEventStream !== eventStream.stop) return
-    state.eventStreamEvents = [event, ...state.eventStreamEvents].slice(0, 12)
-    updateEventList(state.eventStreamEvents)
-  })
+  eventStream = await startAppEventStream(
+    session,
+    space,
+    (event) => {
+      if (state.revision !== revision || state.space !== space || state.session !== session) return
+      // Buffered events can arrive before the subscription handle is returned.
+      if (eventStream && state.stopEventStream !== eventStream.stop) return
+      state.eventCursor = event.cursor
+      state.eventStreamEvents = [
+        event,
+        ...state.eventStreamEvents.filter((item) => item.cursor !== event.cursor),
+      ].slice(0, EVENT_HISTORY_LIMIT)
+      updateEventList(state.eventStreamEvents)
+    },
+    state.eventCursor,
+  )
+  if (state.revision !== revision || state.session !== session || state.space !== space) {
+    await eventStream.stop()
+    return
+  }
   state.stopEventStream = eventStream.stop
   watchEventStream(eventStream)
   updateEventStreamToggle(true)
@@ -447,19 +624,25 @@ function captureDraft() {
 }
 
 async function switchStorageSpace(space: StorageSpace) {
+  const revision = state.revision
   captureDraft()
   await run(
     `Opening ${space} files...`,
     async () => {
       const wasStreaming = Boolean(state.stopEventStream)
       await stopEventStream()
+      await stopEventHistory()
+      await releaseEditorLock()
+      if (state.revision !== revision) return
       state.space = space
       state.files = []
       state.editingId = state.drafts[space]?.editingId
       state.eventStreamEvents = []
+      state.eventCursor = undefined
       setNotice('')
       renderWorkspace()
       await refreshFiles()
+      if (state.revision !== revision) return
       renderWorkspace()
       if (wasStreaming) await connectEventStream()
     },
@@ -488,7 +671,7 @@ function finishEventStream(eventStream: AppEventStream, error?: unknown) {
 async function stopEventStream() {
   const stop = state.stopEventStream
   state.stopEventStream = undefined
-  if (stop) await stop()
+  if (stop) await stop().catch(() => undefined)
 }
 
 async function refreshFiles() {
@@ -496,7 +679,11 @@ async function refreshFiles() {
   if (!session) return
 
   requireStorageAccess(session, state.space)
-  state.files = await listFiles(session, state.space)
+  const space = state.space
+  const revision = state.revision
+  const files = await listFiles(session, space)
+  if (state.revision === revision && state.session === session && state.space === space)
+    state.files = files
 }
 
 async function activateSession(session: Session, notice: string) {
@@ -507,6 +694,10 @@ async function activateSession(session: Session, notice: string) {
   state.drafts = {}
   state.files = []
   state.editingId = undefined
+  state.logoutPending = false
+  const revision = state.revision
+  await refreshSavedAccounts()
+  if (state.revision !== revision || state.session !== session) return
   setNotice(notice)
   await refreshFiles()
 }
@@ -514,6 +705,7 @@ async function activateSession(session: Session, notice: string) {
 function cancelRingSignin() {
   const flow = state.ringAuthFlow
   state.ringAuthFlow = undefined
+  state.ringSignin = {}
   flow?.cancel()
 }
 
@@ -534,7 +726,9 @@ function setError(error: unknown) {
 }
 
 async function run(label: string, task: () => Promise<void>, options: { quiet?: boolean } = {}) {
-  const hadSession = Boolean(state.session)
+  const previousSession = state.session
+  const token = Symbol(label)
+  activeOperation = token
   state.busy = label
   state.quietBusy = options.quiet
   state.error = undefined
@@ -544,13 +738,15 @@ async function run(label: string, task: () => Promise<void>, options: { quiet?: 
   try {
     await task()
   } catch (error) {
+    if (activeOperation !== token) return
     setError(error)
-  } finally {
-    state.busy = undefined
-    state.quietBusy = undefined
   }
+  if (activeOperation !== token) return
+  activeOperation = undefined
+  state.busy = undefined
+  state.quietBusy = undefined
 
-  if (Boolean(state.session) !== hadSession) {
+  if (state.session !== previousSession) {
     mount()
     return
   }
@@ -560,6 +756,165 @@ async function run(label: string, task: () => Promise<void>, options: { quiet?: 
 }
 
 function requireSession() {
-  if (!state.session) throw new Error('No active Pubky session')
+  if (!state.session || state.logoutPending) throw new Error('No active Pubky session')
   return state.session
+}
+
+function savedAccountsHtml() {
+  if (!state.accounts.length) return ''
+  const selected = getSavedSessionId()
+  return `<nav aria-label="Saved accounts"><p>Saved accounts on this browser:</p>${state.accounts
+    .map(
+      (account) =>
+        `<button type="button" data-account-id="${escapeHtml(account.id)}" ${disabledAttr(account.id === selected || Boolean(state.busy))}>${escapeHtml(account.publicKey)}${account.id === selected ? ' (active)' : ''}</button>`,
+    )
+    .join('')}</nav>`
+}
+
+async function refreshSavedAccounts() {
+  const revision = state.revision
+  const accounts = await listSavedAccounts()
+  if (state.revision !== revision) return
+  state.accounts = accounts
+  const container = app.querySelector('#saved-accounts')
+  if (container) container.innerHTML = savedAccountsHtml()
+}
+
+function mountStorageTools() {
+  const container = app.querySelector<HTMLElement>('#storage-tools')
+  toolsPanel = container
+    ? createStorageTools(container, { session: state.session, space: state.space })
+    : undefined
+}
+
+function resetWorkspace() {
+  state.revision += 1
+  activeOperation = undefined
+  state.busy = undefined
+  state.quietBusy = undefined
+  cancelRingSignin()
+  toolsPanel?.dispose()
+  void stopEventStream()
+  void stopEventHistory()
+  void releaseEditorLock()
+  state.session = undefined
+  state.logoutPending = false
+  state.files = []
+  state.editingId = undefined
+  state.drafts = {}
+  state.space = 'public'
+  state.eventStreamEvents = []
+  state.eventCursor = undefined
+}
+
+async function switchAccount(id: string) {
+  resetWorkspace()
+  mount()
+  const revision = state.revision
+  await run('Switching account...', async () => {
+    const session = await selectSavedAccount(id, () => state.revision === revision)
+    if (state.revision !== revision) return
+    if (!session)
+      throw new Error('This saved session is no longer valid. Sign in again with Pubky Ring.')
+    await activateSession(session, 'Account selected.')
+  })
+  if (state.revision === revision && !state.session) await refreshRingSignin(Boolean(state.error))
+}
+
+async function releaseEditorLock() {
+  const lock = state.fileLock
+  state.fileLock = undefined
+  if (lock) {
+    try {
+      await releaseFileLock(lock)
+    } catch {
+      // A lost response or expired/revoked session can prevent explicit unlock.
+      // Server locks have a bounded lease and expire without a browser heartbeat.
+    }
+  }
+}
+
+async function editFile(id: string) {
+  const session = requireSession()
+  const space = state.space
+  const revision = state.revision
+  await run('Locking file for editing...', async () => {
+    await releaseEditorLock()
+    if (state.revision !== revision) return
+    const { file, lock } = await acquireFileLock(session, space, id)
+    if (state.revision !== revision || state.space !== space || state.session !== session) {
+      await releaseFileLock(lock)
+      return
+    }
+    state.fileLock = lock
+    state.files = state.files.map((existing) => (existing.id === id ? file : existing))
+    state.editingId = id
+    delete state.drafts[space]
+    updateEditor(state.files, id, space, state.busy, undefined, lock)
+    setNotice('File locked. Save before the lease expires, or renew the lock.')
+  })
+}
+
+async function renewEditorLock() {
+  const session = requireSession()
+  const lock = state.fileLock
+  if (!lock) return
+  const revision = state.revision
+  captureDraft()
+  await run('Renewing file lock...', async () => {
+    await renewFileLock(session, state.space, lock.id, lock)
+    if (state.revision !== revision || state.fileLock !== lock) return
+    updateEditor(
+      state.files,
+      state.editingId,
+      state.space,
+      state.busy,
+      state.drafts[state.space],
+      lock,
+    )
+    setNotice('File lock renewed.')
+  })
+}
+
+async function stopEventHistory() {
+  const stop = state.stopEventHistory
+  state.stopEventHistory = undefined
+  if (stop) await stop().catch(() => undefined)
+}
+
+async function loadEventHistory() {
+  const session = requireSession()
+  const space = state.space
+  const revision = state.revision
+  await run('Loading recent events...', async () => {
+    await stopEventStream()
+    await stopEventHistory()
+    if (state.revision !== revision) return
+    state.eventStreamEvents = []
+    const events: AppEvent[] = []
+    let stream: AppEventStream | undefined = undefined
+    stream = await startAppEventHistory(session, space, (event) => {
+      if (state.revision !== revision || state.session !== session || state.space !== space) return
+      if (stream && state.stopEventHistory !== stream.stop) return
+      events.push(event)
+      state.eventStreamEvents = [...events]
+      if (events.length === 1) state.eventCursor = event.cursor
+      updateEventList(state.eventStreamEvents)
+    })
+    if (state.revision !== revision || state.session !== session) {
+      await stream.stop()
+      return
+    }
+    state.stopEventHistory = stream.stop
+    try {
+      await stream.done
+    } finally {
+      if (state.stopEventHistory === stream.stop) state.stopEventHistory = undefined
+    }
+    if (state.revision !== revision) return
+    setNotice(
+      `Loaded ${events.length} recent events. Start live to continue from the newest event.`,
+    )
+    updateEventStreamToggle(false)
+  })
 }
