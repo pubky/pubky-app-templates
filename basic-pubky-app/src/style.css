@@ -208,6 +208,7 @@ textarea { resize: vertical; }
 }
 
 .user-block button { white-space: nowrap; }
+.account-actions { display: flex; gap: 0.5rem; }
 
 .muted,
 .empty,

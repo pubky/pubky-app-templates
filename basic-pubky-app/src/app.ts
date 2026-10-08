@@ -192,8 +192,10 @@ function mount() {
 function signedInHeader(session: Session) {
   return `
     <div class="user-block">
-      <button id="sign-out" type="button" ${disabledAttr(Boolean(state.busy))}>${state.logoutPending ? 'Retry sign out' : 'Sign out'}</button>
-      <button id="add-account" type="button" ${disabledAttr(Boolean(state.busy))}>Add account</button>
+      <div class="account-actions">
+        <button id="sign-out" type="button" ${disabledAttr(Boolean(state.busy))}>${state.logoutPending ? 'Retry sign out' : 'Sign out'}</button>
+        <button id="add-account" type="button" ${disabledAttr(Boolean(state.busy))}>Add account</button>
+      </div>
       <p class="pubky-id">${escapeHtml(session.info.publicKey.toString())}</p>
     </div>
   `
