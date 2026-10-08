@@ -7,6 +7,7 @@ import { createServer } from 'vite'
 let server
 let storage
 let access
+let filesUi
 const owner = Keypair.random().publicKey
 const otherOwner = Keypair.random().publicKey
 const directories = {
@@ -25,10 +26,29 @@ before(async () => {
   })
   storage = await server.ssrLoadModule('/src/storage.ts')
   access = await server.ssrLoadModule('/src/access.ts')
+  filesUi = await server.ssrLoadModule('/src/files-ui.ts')
 })
 
 after(async () => {
   await server?.close()
+})
+
+test('the shared file list keeps uploaded JSON out of the note editor', () => {
+  const note = { id: 'note', title: 'A note', body: '', updatedAt: '' }
+  const upload = { name: 'uploaded.json', metadata: { contentLength: 3 } }
+  const publicHtml = filesUi.filesPanelHtml([note], 'public', undefined, [upload])
+  assert.equal((publicHtml.match(/<ul /g) || []).length, 1)
+  assert.ok(publicHtml.includes('data-edit-id="note"'))
+  assert.ok(publicHtml.includes('data-upload-name="uploaded.json"'))
+  assert.ok(!publicHtml.includes('data-edit-id="uploaded.json"'))
+  assert.ok(!publicHtml.includes('data-delete-id="uploaded.json"'))
+  assert.ok(publicHtml.includes('data-upload-action="copy"'))
+
+  const privateHtml = filesUi.filesPanelHtml([], 'private', undefined, [upload])
+  assert.ok(!privateHtml.includes('data-upload-action="copy"'))
+  assert.ok(!privateHtml.includes('class="empty"'))
+  assert.ok(privateHtml.includes('data-upload-action="download"'))
+  assert.ok(privateHtml.includes('data-upload-action="delete"'))
 })
 
 function address(path, publicKey = owner) {

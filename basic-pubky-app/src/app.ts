@@ -65,6 +65,16 @@ import {
   type FileLock,
 } from './storage'
 import { storageToolsPanelHtml, createStorageTools } from './storage-tools'
+import { downloadBytes } from './storage-download'
+import {
+  deleteUploadedFile,
+  listUploadedFiles,
+  publicUploadedFileAddress,
+  readUploadedFile,
+  uploadedFilePath,
+  uploadFileBytes,
+  type UploadedFile,
+} from './storage-tools-data'
 
 interface State {
   revision: number
@@ -80,6 +90,7 @@ interface State {
   notice?: string
   noticePath?: string
   files: AppFile[]
+  uploads: UploadedFile[]
   space: StorageSpace
   drafts: Partial<Record<StorageSpace, FileDraft & { editingId?: string }>>
   ringAuthFlow?: RingAuthFlow
@@ -95,6 +106,7 @@ const state: State = {
   logoutPending: false,
   eventStreamEvents: [],
   files: [],
+  uploads: [],
   space: 'public',
   drafts: {},
   ringSignin: {},
@@ -167,7 +179,7 @@ function mount() {
       </header>
       <div id="saved-accounts">${savedAccountsHtml()}</div>
       <div id="status">${statusHtml()}</div>
-      <div id="view">${session ? signedInViewHtml() : authViewHtml(state.ringSignin, state.busy) + storageToolsPanelHtml(false, state.space)}</div>
+      <div id="view">${session ? signedInViewHtml() : authViewHtml(state.ringSignin, state.busy) + storageToolsPanelHtml()}</div>
       <footer class="app-footer">Built with <a href="https://www.npmjs.com/package/@synonymdev/pubky">Pubky SDK</a> v${pubkySdkVersion}</footer>
     </main>
   `
@@ -194,10 +206,10 @@ function signedInViewHtml() {
     ${storageSpacesHtml(state.space, state.busy)}
     <section class="grid">
       ${editorPanelHtml(state.files, state.editingId, state.space, state.busy, state.drafts[state.space], state.fileLock)}
-      ${filesPanelHtml(state.files, state.space, state.busy)}
+      ${filesPanelHtml(state.files, state.space, state.busy, state.uploads)}
       ${eventStreamPanelHtml(state.eventStreamEvents, Boolean(state.stopEventStream), state.space, state.busy)}
     </section>
-    ${storageToolsPanelHtml(true, state.space)}
+    ${storageToolsPanelHtml()}
   `
 }
 
@@ -259,7 +271,7 @@ function syncControls() {
   }
 
   for (const input of app.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
-    '#file-form input, #file-form textarea',
+    '#file-form input, #file-form textarea, #file-upload-form input',
   )) {
     input.disabled = busy || !canAccess
   }
@@ -313,6 +325,11 @@ function handleClick(event: MouseEvent) {
 
   if (button.dataset.deleteId) {
     void handleDeleteFile(button.dataset.deleteId)
+    return
+  }
+
+  if (button.dataset.uploadName && button.dataset.uploadAction) {
+    void handleUploadedFileAction(button.dataset.uploadName, button.dataset.uploadAction)
     return
   }
 
@@ -373,6 +390,7 @@ function handleSubmit(event: SubmitEvent) {
   if (state.busy || form.closest('#storage-tools') || state.logoutPending) return
   if (form.id === 'development-signup-form') void handleDevelopmentSignup(form)
   if (form.id === 'file-form') void handleSaveFile(form)
+  if (form.id === 'file-upload-form') void handleUploadFile(form)
 }
 
 async function refreshRingSignin(preserveError = false, fresh = false) {
@@ -505,7 +523,7 @@ async function handleSaveFile(form: HTMLFormElement) {
     setNotice('File saved:', filePath(space, file.id))
     await refreshFiles()
     if (state.revision !== revision) return
-    updateFilesList(state.files, space, state.busy)
+    updateFilesList(state.files, space, state.busy, state.uploads)
     updateEditor(state.files, state.editingId, space, state.busy, undefined, state.fileLock)
   })
 }
@@ -529,7 +547,7 @@ async function handleDeleteFile(id: string) {
     setNotice('File deleted:', filePath(space, id))
     await refreshFiles()
     if (state.revision !== revision) return
-    updateFilesList(state.files, space, state.busy)
+    updateFilesList(state.files, space, state.busy, state.uploads)
     updateEditor(
       state.files,
       state.editingId,
@@ -541,12 +559,59 @@ async function handleDeleteFile(id: string) {
   })
 }
 
+async function handleUploadFile(form: HTMLFormElement) {
+  const session = requireSession()
+  const space = state.space
+  const revision = state.revision
+  const file = new FormData(form).get('file')
+  if (!(file instanceof File) || !file.name) return
+  const isCurrent = () =>
+    state.revision === revision && state.session === session && state.space === space
+
+  await run('Uploading file...', async () => {
+    const name = await uploadFileBytes(session, space, file, isCurrent)
+    if (!isCurrent()) return
+    form.reset()
+    setNotice('File uploaded:', uploadedFilePath(space, name))
+    await refreshFiles()
+    if (isCurrent()) updateFilesList(state.files, space, state.busy, state.uploads)
+  })
+}
+
+async function handleUploadedFileAction(name: string, action: string) {
+  const session = requireSession()
+  const space = state.space
+  const revision = state.revision
+  const isCurrent = () =>
+    state.revision === revision && state.session === session && state.space === space
+
+  await run('Working with file...', async () => {
+    requireStorageAccess(session, space)
+    if (action === 'download') {
+      const bytes = await readUploadedFile(session, space, name, isCurrent)
+      if (!isCurrent()) return
+      downloadBytes(bytes, name)
+      setNotice('File downloaded.')
+    } else if (action === 'delete') {
+      await deleteUploadedFile(session, space, name)
+      if (!isCurrent()) return
+      setNotice('File deleted:', uploadedFilePath(space, name))
+      await refreshFiles()
+      if (isCurrent()) updateFilesList(state.files, space, state.busy, state.uploads)
+    } else if (action === 'copy' && space === 'public') {
+      await copyTextToClipboard(publicUploadedFileAddress(session, name))
+      if (isCurrent()) setNotice('Public address copied.')
+    }
+  })
+}
+
 async function handleSignOut() {
   const session = state.session
   if (!session) return
   state.logoutPending = true
   toolsPanel?.dispose()
   state.files = []
+  state.uploads = []
   state.drafts = {}
   state.eventStreamEvents = []
   mount()
@@ -636,6 +701,7 @@ async function switchStorageSpace(space: StorageSpace) {
       if (state.revision !== revision) return
       state.space = space
       state.files = []
+      state.uploads = []
       state.editingId = state.drafts[space]?.editingId
       state.eventStreamEvents = []
       state.eventCursor = undefined
@@ -681,9 +747,16 @@ async function refreshFiles() {
   requireStorageAccess(session, state.space)
   const space = state.space
   const revision = state.revision
-  const files = await listFiles(session, space)
-  if (state.revision === revision && state.session === session && state.space === space)
+  const isCurrent = () =>
+    state.revision === revision && state.session === session && state.space === space
+  const [files, uploads] = await Promise.all([
+    listFiles(session, space),
+    listUploadedFiles(session, space, isCurrent),
+  ])
+  if (isCurrent()) {
     state.files = files
+    state.uploads = uploads
+  }
 }
 
 async function activateSession(session: Session, notice: string) {
@@ -693,6 +766,7 @@ async function activateSession(session: Session, notice: string) {
   state.space = 'public'
   state.drafts = {}
   state.files = []
+  state.uploads = []
   state.editingId = undefined
   state.logoutPending = false
   const revision = state.revision
@@ -782,9 +856,7 @@ async function refreshSavedAccounts() {
 
 function mountStorageTools() {
   const container = app.querySelector<HTMLElement>('#storage-tools')
-  toolsPanel = container
-    ? createStorageTools(container, { session: state.session, space: state.space })
-    : undefined
+  toolsPanel = container ? createStorageTools(container) : undefined
 }
 
 function resetWorkspace() {
@@ -800,6 +872,7 @@ function resetWorkspace() {
   state.session = undefined
   state.logoutPending = false
   state.files = []
+  state.uploads = []
   state.editingId = undefined
   state.drafts = {}
   state.space = 'public'

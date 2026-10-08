@@ -1,6 +1,7 @@
 import { APP_PATHS, type StorageSpace } from './config'
 import { disabledAttr, escapeHtml, formatDate } from './html'
 import { filePath, type AppFile, type FileLock } from './storage'
+import { uploadedFilePath, type UploadedFile } from './storage-tools-data'
 
 export interface FileDraft {
   title: string
@@ -22,15 +23,25 @@ export function editorPanelHtml(
         <span id="new-file-slot">${newFileButtonHtml(editingId, busy)}</span>
       </div>
       <div id="editor">${fileFormHtml(files, editingId, space, busy, draft, lock)}</div>
+      <form id="file-upload-form" class="form-grid file-upload">
+        <label>Or upload a file <input type="file" name="file" required ${disabledAttr(Boolean(busy))} /></label>
+        <small class="muted">Store any file as bytes, up to 5 MiB.</small>
+        <button type="submit" ${disabledAttr(Boolean(busy))}>Upload ${space} file</button>
+      </form>
     </section>
   `
 }
 
-export function filesPanelHtml(files: AppFile[], space: StorageSpace, busy?: string) {
+export function filesPanelHtml(
+  files: AppFile[],
+  space: StorageSpace,
+  busy?: string,
+  uploads: UploadedFile[] = [],
+) {
   return `
     <section class="panel">
       <h2>Files</h2>
-      <div id="files-list">${filesListHtml(files, space, busy)}</div>
+      <div id="files-list">${filesListHtml(files, space, busy, uploads)}</div>
     </section>
   `
 }
@@ -50,10 +61,15 @@ export function updateEditor(
   if (slot) slot.innerHTML = newFileButtonHtml(editingId, busy)
 }
 
-export function updateFilesList(files: AppFile[], space: StorageSpace, busy?: string) {
+export function updateFilesList(
+  files: AppFile[],
+  space: StorageSpace,
+  busy?: string,
+  uploads: UploadedFile[] = [],
+) {
   const list = document.querySelector('#files-list')
   if (!list) return
-  list.innerHTML = filesListHtml(files, space, busy)
+  list.innerHTML = filesListHtml(files, space, busy, uploads)
 }
 
 function newFileButtonHtml(editingId: string | undefined, busy?: string) {
@@ -89,15 +105,38 @@ function fileFormHtml(
   `
 }
 
-function filesListHtml(files: AppFile[], space: StorageSpace, busy?: string) {
-  if (files.length === 0) {
+function filesListHtml(
+  files: AppFile[],
+  space: StorageSpace,
+  busy: string | undefined,
+  uploads: UploadedFile[],
+) {
+  if (files.length === 0 && uploads.length === 0) {
     return `<p class="empty">No ${space} files yet.</p>`
   }
 
   return `
     <ul class="file-list">
       ${files.map((file) => fileItem(file, space, busy)).join('')}
+      ${uploads.map((file) => uploadedFileItem(file, space, busy)).join('')}
     </ul>
+  `
+}
+
+function uploadedFileItem(file: UploadedFile, space: StorageSpace, busy?: string) {
+  return `
+    <li>
+      <div>
+        <strong title="${escapeHtml(uploadedFilePath(space, file.name))}">${escapeHtml(file.name)}</strong>
+        <span>Uploaded file</span>
+        ${file.metadata ? `<small>${escapeHtml(metadataLabel(file.metadata))}</small>` : ''}
+      </div>
+      <div class="actions">
+        <button type="button" data-upload-action="download" data-upload-name="${escapeHtml(file.name)}" ${disabledAttr(Boolean(busy))}>Download</button>
+        <button type="button" data-upload-action="delete" data-upload-name="${escapeHtml(file.name)}" ${disabledAttr(Boolean(busy))}>Delete</button>
+        ${space === 'public' ? `<button type="button" data-upload-action="copy" data-upload-name="${escapeHtml(file.name)}" ${disabledAttr(Boolean(busy))}>Copy public address</button>` : ''}
+      </div>
+    </li>
   `
 }
 

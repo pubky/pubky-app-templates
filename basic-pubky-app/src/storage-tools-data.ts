@@ -3,22 +3,23 @@ import type { Address, Path, PublicStorage, ResourceStats, Session } from '@syno
 import { requireStorageAccess } from './access'
 import { APP_PATHS, type StorageSpace } from './config'
 
-export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
+export const MAX_FILE_BYTES = 5 * 1024 * 1024
 const PAGE_SIZE = 50
 
-export interface Attachment {
+export interface UploadedFile {
   name: string
   metadata?: ResourceStats
 }
 
-export function attachmentPath(space: StorageSpace, name: string): Path {
-  if (!isAttachmentName(name)) {
-    throw new Error('Invalid attachment filename.')
+// This template keeps uploads in its existing attachments/ folder; Pubky treats it as a normal path.
+export function uploadedFilePath(space: StorageSpace, name: string): Path {
+  if (!isUploadedFileName(name)) {
+    throw new Error('Invalid uploaded filename.')
   }
   return `${APP_PATHS[space]}attachments/${name}`
 }
 
-export async function listAttachments(
+export async function listUploadedFiles(
   session: Session,
   space: StorageSpace,
   isCurrent: () => boolean = () => true,
@@ -39,9 +40,9 @@ export async function listAttachments(
           !resource.path.startsWith(directory) ||
           name.includes('/')
         ) {
-          throw new Error('The homeserver returned an attachment outside the selected folder.')
+          throw new Error('The homeserver returned a file outside the selected folder.')
         }
-        if (isAttachmentName(name)) names.push(name)
+        if (isUploadedFileName(name)) names.push(name)
       }
       const next = urls.at(-1)
       if (!next || next === cursor || urls.length < PAGE_SIZE) break
@@ -52,14 +53,14 @@ export async function listAttachments(
   }
   requireCurrent(isCurrent)
   return Promise.all(
-    [...new Set(names)].map(async (name): Promise<Attachment> => ({
+    [...new Set(names)].map(async (name): Promise<UploadedFile> => ({
       name,
-      metadata: await session.storage.stats(attachmentPath(space, name)),
+      metadata: await session.storage.stats(uploadedFilePath(space, name)),
     })),
   )
 }
 
-export async function uploadAttachment(
+export async function uploadFileBytes(
   session: Session,
   space: StorageSpace,
   file: File,
@@ -72,20 +73,20 @@ export async function uploadAttachment(
   const bytes = new Uint8Array(await file.arrayBuffer())
   checkByteLength(bytes.byteLength)
   requireCurrent(isCurrent)
-  await session.storage.putBytes(attachmentPath(space, name), bytes)
+  await session.storage.putBytes(uploadedFilePath(space, name), bytes)
   return name
 }
 
-export async function readAttachment(
+export async function readUploadedFile(
   session: Session,
   space: StorageSpace,
   name: string,
   isCurrent: () => boolean = () => true,
 ) {
   requireStorageAccess(session, space)
-  const path = attachmentPath(space, name)
+  const path = uploadedFilePath(space, name)
   const metadata = await session.storage.stats(path)
-  if (!metadata) throw new Error('This attachment no longer exists.')
+  if (!metadata) throw new Error('This file no longer exists.')
   if (metadata.contentLength !== undefined) checkByteLength(metadata.contentLength)
   requireCurrent(isCurrent)
   const bytes = await session.storage.getBytes(path)
@@ -93,13 +94,13 @@ export async function readAttachment(
   return bytes
 }
 
-export async function removeAttachment(session: Session, space: StorageSpace, name: string) {
+export async function deleteUploadedFile(session: Session, space: StorageSpace, name: string) {
   requireStorageAccess(session, space)
-  await session.storage.delete(attachmentPath(space, name))
+  await session.storage.delete(uploadedFilePath(space, name))
 }
 
-export function publicAttachmentAddress(session: Session, name: string) {
-  return `pubky://${session.info.publicKey.z32()}${attachmentPath('public', name)}`
+export function publicUploadedFileAddress(session: Session, name: string) {
+  return `pubky://${session.info.publicKey.z32()}${uploadedFilePath('public', name)}`
 }
 
 /** Only canonical Pubky public resources are accepted, never arbitrary HTTP URLs. */
@@ -178,7 +179,7 @@ export async function readLimitedResponse(
   return bytes
 }
 
-function isAttachmentName(name: string) {
+function isUploadedFileName(name: string) {
   return /^[a-zA-Z0-9_-][a-zA-Z0-9._-]{0,179}$/.test(name)
 }
 
@@ -187,7 +188,7 @@ function requireCurrent(isCurrent: () => boolean) {
 }
 
 function checkByteLength(length: number) {
-  if (!Number.isFinite(length) || length < 0 || length > MAX_ATTACHMENT_BYTES) {
+  if (!Number.isFinite(length) || length < 0 || length > MAX_FILE_BYTES) {
     throw new Error('This template handles files up to 5 MiB.')
   }
 }

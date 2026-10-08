@@ -12,7 +12,7 @@ This template focuses on Pubky’s core building blocks. The included vanilla HT
 - A development-only authentication shortcut that removes sign-in friction on a local testnet. It requires `signup_mode = "open"` and is not intended as a pattern for production apps.
 - Session persistence, saved account switching, and sign-out synchronization across tabs via the SDK browser session store.
 - Public and private file storage under configured paths on the user’s Homeserver, using the same editor and file operations.
-- File editing with WebDAV locks, metadata, downloads, binary attachments, and an anonymous public file reader.
+- File editing with WebDAV locks, byte uploads in the same editor section, metadata, downloads, and an anonymous public file reader.
 - Recent event history and live updates that resume from the last received cursor, scoped to the selected public or private folder.
 - Preconfigured weekly Dependabot updates for all npm dependencies, with Pubky stack packages grouped together.
 
@@ -78,7 +78,9 @@ Locks prevent competing writes while held; they do not merge edits. Contention, 
 
 ### Uploads and Public Reads
 
-The storage tools demonstrate binary uploads and downloads separately from the JSON note editor, with a 5 MiB limit per attachment or public read. Attachments use unique filenames under `/pub/template/attachments/` or `/priv/template/attachments/` and follow the same public/private access rules. File metadata describes the stored resource; downloaded content is treated as a file rather than executed in the page.
+The Editor offers two ways to write a file: save a title and body as a JSON note, or upload a file from your computer as bytes. Both appear in the same Files list. Notes support editing with locks; uploads can be downloaded or deleted without interpreting their contents as note JSON, even if the uploaded filename ends in `.json`. Uploading preserves the current note draft.
+
+The reusable `uploadFileBytes(session, space, file)` function in [`src/storage-tools-data.ts`](src/storage-tools-data.ts) demonstrates `session.storage.putBytes`; note creation in [`src/storage.ts`](src/storage.ts) demonstrates `session.storage.putJson`. Uploads and public reads have a 5 MiB limit. Uploaded files keep unique names under `/pub/template/attachments/` or `/priv/template/attachments/` so previous uploads remain accessible. Those folder names are a template convention, not a distinct SDK storage type; the public/private access rules apply to notes and uploads equally. File metadata describes the stored resource; downloaded content is treated as a file rather than executed in the page.
 
 Copy a public file's Pubky address to share it. The public reader works without signing in and accepts public Pubky resource addresses. It does not grant access to private resources or provide selected-recipient sharing.
 

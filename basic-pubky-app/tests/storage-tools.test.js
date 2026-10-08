@@ -66,7 +66,7 @@ test('public reader canonicalizes public Pubky addresses and rejects private or 
     assert.throws(() => data.parsePublicAddress(value), undefined, value)
 })
 
-test('attachment listings validate owner and app folder before requesting metadata', async () => {
+test('uploaded file listings validate owner and app folder before requesting metadata', async () => {
   const valid = address('/priv/template/attachments/file.bin')
   const invalid = [
     address('/priv/template/attachments/file.bin', anotherOwner),
@@ -76,21 +76,27 @@ test('attachment listings validate owner and app folder before requesting metada
   ]
   for (const url of invalid) {
     const { session, calls } = sessionFor([valid, url])
-    await assert.rejects(data.listAttachments(session, 'private'), /outside the selected folder/)
+    await assert.rejects(data.listUploadedFiles(session, 'private'), /outside the selected folder/)
     assert.deepEqual(calls.metadata, [])
   }
   const { session } = sessionFor([valid, address('/priv/template/attachments/two%20words.bin')])
   assert.deepEqual(
-    (await data.listAttachments(session, 'private')).map((file) => file.name),
+    (await data.listUploadedFiles(session, 'private')).map((file) => file.name),
     ['file.bin'],
   )
 })
 
-test('attachment filenames cannot redirect downloads or deletes', async () => {
+test('uploaded filenames cannot redirect downloads or deletes', async () => {
   const { session, calls } = sessionFor()
   for (const name of ['../secret', 'nested/file', '%2e%2e', 'file?query', '.hidden', '..']) {
-    await assert.rejects(data.readAttachment(session, 'private', name), /Invalid attachment/)
-    await assert.rejects(data.removeAttachment(session, 'private', name), /Invalid attachment/)
+    await assert.rejects(
+      data.readUploadedFile(session, 'private', name),
+      /Invalid uploaded filename/,
+    )
+    await assert.rejects(
+      data.deleteUploadedFile(session, 'private', name),
+      /Invalid uploaded filename/,
+    )
   }
   assert.deepEqual(calls.metadata, [])
   assert.deepEqual(calls.gets, [])
@@ -100,7 +106,7 @@ test('attachment filenames cannot redirect downloads or deletes', async () => {
 test('binary uploads use app-specific unique filenames and preserve byte values', async () => {
   const { session, calls } = sessionFor()
   const bytes = new Uint8Array([0, 128, 255])
-  const name = await data.uploadAttachment(session, 'private', {
+  const name = await data.uploadFileBytes(session, 'private', {
     name: '../../<script>.bin',
     size: bytes.length,
     arrayBuffer: async () => bytes.buffer,
@@ -108,7 +114,7 @@ test('binary uploads use app-specific unique filenames and preserve byte values'
   assert.match(name, /^[a-f0-9-]+-[a-zA-Z0-9._-]+$/)
   assert.equal(calls.puts[0].path, `/priv/template/attachments/${name}`)
   assert.deepEqual([...calls.puts[0].bytes], [...bytes])
-  const downloaded = await data.readAttachment(session, 'private', name)
+  const downloaded = await data.readUploadedFile(session, 'private', name)
   assert.deepEqual([...downloaded], [...bytes])
 })
 
@@ -116,9 +122,9 @@ test('oversized uploads and view changes cannot initiate a write', async () => {
   const { session, calls } = sessionFor()
   let read = false
   await assert.rejects(
-    data.uploadAttachment(session, 'public', {
+    data.uploadFileBytes(session, 'public', {
       name: 'large.bin',
-      size: data.MAX_ATTACHMENT_BYTES + 1,
+      size: data.MAX_FILE_BYTES + 1,
       arrayBuffer: async () => {
         read = true
         return new ArrayBuffer(0)
@@ -128,7 +134,7 @@ test('oversized uploads and view changes cannot initiate a write', async () => {
   )
   assert.equal(read, false)
   await assert.rejects(
-    data.uploadAttachment(
+    data.uploadFileBytes(
       session,
       'private',
       {
@@ -147,19 +153,30 @@ test('binary operations respect session capabilities', async () => {
   const { session, calls } = sessionFor()
   session.info.capabilities = ['/pub/template/:rw']
   await assert.rejects(
-    data.listAttachments(session, 'private'),
+    data.listUploadedFiles(session, 'private'),
     /does not have read and write access/,
   )
   await assert.rejects(
-    data.readAttachment(session, 'private', 'file.bin'),
+    data.readUploadedFile(session, 'private', 'file.bin'),
     /does not have read and write access/,
   )
   await assert.rejects(
-    data.removeAttachment(session, 'private', 'file.bin'),
+    data.deleteUploadedFile(session, 'private', 'file.bin'),
+    /does not have read and write access/,
+  )
+  await assert.rejects(
+    data.uploadFileBytes(session, 'private', {
+      name: 'file.bin',
+      size: 1,
+      arrayBuffer: async () => {
+        assert.fail('An unauthorized upload must not read the selected file.')
+      },
+    }),
     /does not have read and write access/,
   )
   assert.deepEqual(calls.metadata, [])
   assert.deepEqual(calls.deletes, [])
+  assert.deepEqual(calls.puts, [])
 })
 
 test('anonymous public reads never request a session and preserve binary content', async () => {
@@ -184,7 +201,7 @@ test('public streaming reads cancel oversized bodies even without a Content-Leng
   const response = new globalThis.Response(
     new globalThis.ReadableStream({
       start(controller) {
-        controller.enqueue(new Uint8Array(data.MAX_ATTACHMENT_BYTES + 1))
+        controller.enqueue(new Uint8Array(data.MAX_FILE_BYTES + 1))
       },
       cancel() {
         canceled = true

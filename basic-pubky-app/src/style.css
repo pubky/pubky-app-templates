@@ -226,8 +226,8 @@ textarea { resize: vertical; }
 }
 #saved-accounts p { flex-basis: 100%; margin: 0; }
 [data-account-id] { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
-.storage-tools { margin-top: 1rem; }
-#attachments-list { margin: 1rem 0; }
+.storage-tools { margin-top: 1rem; grid-template-columns: minmax(0, 1fr); }
+.file-upload { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #d8dde5; }
 #storage-tools-status { grid-column: 1 / -1; margin-bottom: 0; }
 #storage-tools-status:empty { display: none; }
 .file-list small { display: block; overflow-wrap: anywhere; }
