@@ -177,8 +177,8 @@ function mount() {
         <h1>Pubky App Template</h1>
         ${session ? signedInHeader(session) : ''}
       </header>
-      <div id="saved-accounts">${savedAccountsHtml()}</div>
       <div id="status">${statusHtml()}</div>
+      <div id="saved-accounts">${savedAccountsHtml()}</div>
       <div id="view">${session ? signedInViewHtml() : authViewHtml(state.ringSignin, state.busy) + storageToolsPanelHtml()}</div>
       <footer class="app-footer">Built with <a href="https://www.npmjs.com/package/@synonymdev/pubky">Pubky SDK</a> v${pubkySdkVersion}</footer>
     </main>
@@ -839,6 +839,7 @@ function requireSession() {
 function savedAccountsHtml() {
   if (!state.accounts.length) return ''
   const selected = getSavedSessionId()
+  if (state.session && state.accounts.length === 1 && state.accounts[0]?.id === selected) return ''
   return `<nav aria-label="Saved accounts"><p>Saved accounts on this browser:</p>${state.accounts
     .map(
       (account) =>
