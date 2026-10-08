@@ -120,6 +120,10 @@ export function start(root: HTMLElement) {
   app = root
   app.addEventListener('click', handleClick)
   app.addEventListener('submit', handleSubmit)
+  app.addEventListener('change', (event) => {
+    const input = event.target
+    if (input instanceof HTMLInputElement && input.name === 'write-mode') syncControls()
+  })
   subscribeSavedSessionChanges((change) => {
     if (change.type === 'accounts') {
       void refreshSavedAccounts()
@@ -248,6 +252,9 @@ function syncControls() {
   const loading = Boolean(state.ringSignin.loading)
   const canUse = canUseAuthorizationUrl()
   const canAccess = !state.session || hasStorageAccess(state.session, state.space)
+  const writeMode = app.querySelector<HTMLInputElement>(
+    '#file-form input[name="write-mode"]:checked',
+  )?.value
 
   for (const button of app.querySelectorAll('button')) {
     if (button.closest('#storage-tools')) continue
@@ -256,7 +263,11 @@ function syncControls() {
       continue
     }
     if (button.type === 'submit' && button.closest('#file-form')) {
-      button.disabled = busy || !canAccess || Boolean(state.editingId && !state.fileLock)
+      button.disabled =
+        busy ||
+        !canAccess ||
+        !['note', 'file'].includes(writeMode ?? '') ||
+        (writeMode === 'note' && Boolean(state.editingId && !state.fileLock))
       continue
     }
     switch (button.id) {
@@ -272,11 +283,18 @@ function syncControls() {
     }
   }
 
-  for (const input of app.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
-    '#file-form input, #file-form textarea, #file-upload-form input',
-  )) {
-    input.disabled = busy || !canAccess
+  for (const fields of app.querySelectorAll<HTMLFieldSetElement>('#file-form fieldset')) {
+    fields.hidden = Boolean(fields.dataset.writeMode && fields.dataset.writeMode !== writeMode)
+    fields.disabled = busy || !canAccess || fields.hidden
   }
+  for (const input of app.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+    '#file-form input, #file-form textarea',
+  )) {
+    const fields = input.closest<HTMLFieldSetElement>('fieldset[data-write-mode]')
+    input.disabled = busy || !canAccess || Boolean(fields?.hidden)
+  }
+  const fileInput = app.querySelector<HTMLInputElement>('#file-form input[name="file"]')
+  if (fileInput) fileInput.required = writeMode === 'file'
 
   updateAuthorizeLink(canUse, state.ringSignin.authorizationUrl)
 }
@@ -374,7 +392,9 @@ function handleClick(event: MouseEvent) {
       void releaseEditorLock()
       state.editingId = undefined
       delete state.drafts[state.space]
+      selectNoteMode()
       updateEditor(state.files, state.editingId, state.space, state.busy)
+      syncControls()
       break
     case 'toggle-event-stream':
       void toggleEventStream()
@@ -391,8 +411,11 @@ function handleSubmit(event: SubmitEvent) {
   event.preventDefault()
   if (state.busy || form.closest('#storage-tools') || state.logoutPending) return
   if (form.id === 'development-signup-form') void handleDevelopmentSignup(form)
-  if (form.id === 'file-form') void handleSaveFile(form)
-  if (form.id === 'file-upload-form') void handleUploadFile(form)
+  if (form.id === 'file-form') {
+    const mode = new FormData(form).get('write-mode')
+    if (mode === 'note') void handleSaveFile(form)
+    else if (mode === 'file') void handleUploadFile(form)
+  }
 }
 
 async function refreshRingSignin(preserveError = false, fresh = false) {
@@ -573,7 +596,8 @@ async function handleUploadFile(form: HTMLFormElement) {
   await run('Uploading file...', async () => {
     const name = await uploadFileBytes(session, space, file, isCurrent)
     if (!isCurrent()) return
-    form.reset()
+    const fileInput = form.querySelector<HTMLInputElement>('input[name="file"]')
+    if (fileInput) fileInput.value = ''
     setNotice('File uploaded:', uploadedFilePath(space, name))
     await refreshFiles()
     if (isCurrent()) updateFilesList(state.files, space, state.busy, state.uploads)
@@ -682,11 +706,11 @@ async function connectEventStream() {
 function captureDraft() {
   const form = app.querySelector<HTMLFormElement>('#file-form')
   if (!form) return
-  const data = new FormData(form)
   state.drafts[state.space] = {
     editingId: state.editingId,
-    title: formValue(data, 'title'),
-    body: formValue(data, 'body'),
+    // Read values directly: inactive note fields are deliberately omitted from FormData.
+    title: form.querySelector<HTMLInputElement>('input[name="title"]')?.value ?? '',
+    body: form.querySelector<HTMLTextAreaElement>('textarea[name="body"]')?.value ?? '',
   }
 }
 
@@ -926,9 +950,17 @@ async function editFile(id: string) {
     state.files = state.files.map((existing) => (existing.id === id ? file : existing))
     state.editingId = id
     delete state.drafts[space]
+    selectNoteMode()
     updateEditor(state.files, id, space, state.busy, undefined, lock)
     setNotice('File locked. Save before the lease expires, or renew the lock.')
   })
+}
+
+function selectNoteMode() {
+  const option = app.querySelector<HTMLInputElement>(
+    '#file-form input[name="write-mode"][value="note"]',
+  )
+  if (option) option.checked = true
 }
 
 async function renewEditorLock() {

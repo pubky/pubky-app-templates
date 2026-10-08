@@ -78,7 +78,9 @@ Locks prevent competing writes while held; they do not merge edits. Contention, 
 
 ### Uploads and Public Reads
 
-The Editor offers two ways to write a file: save a title and body as a JSON note, or upload a file from your computer as bytes. Both appear in the same Files list. Notes support editing with locks; uploads can be downloaded or deleted without interpreting their contents as note JSON, even if the uploaded filename ends in `.json`. Uploading preserves the current note draft.
+The Editor offers **Write a note** or **Choose a file**, with one **Upload** button at the bottom. The selected mode uploads either the title and body as a JSON note or the selected file's bytes, never both. Switching modes preserves your draft and file selection while keeping the inactive fields disabled. The public/private selector above the editor sets the destination for either mode.
+
+Both appear in the same Files list. Notes support editing with locks; uploads can be downloaded or deleted without interpreting their contents as note JSON, even if the uploaded filename ends in `.json`. Uploading a file preserves the current note draft.
 
 The reusable `uploadFileBytes(session, space, file)` function in [`src/storage-tools-data.ts`](src/storage-tools-data.ts) demonstrates `session.storage.putBytes`; note creation in [`src/storage.ts`](src/storage.ts) demonstrates `session.storage.putJson`. Uploads and public reads have a 5 MiB limit. Uploaded files keep unique names under `/pub/template/attachments/` or `/priv/template/attachments/` so previous uploads remain accessible. Those folder names are a template convention, not a distinct SDK storage type; the public/private access rules apply to notes and uploads equally. File metadata describes the stored resource; downloaded content is treated as a file rather than executed in the page.
 

@@ -171,6 +171,15 @@ textarea { resize: vertical; }
   font-weight: 600;
 }
 
+.write-modes,
+.editor-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.write-modes { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+.write-modes legend { margin-bottom: 0.5rem; padding: 0; font-weight: 600; }
+.write-modes label { display: inline-flex; align-items: center; font-weight: 400; }
+.write-modes input { width: auto; margin: 0; }
+.editor-fields { display: grid; gap: 1rem; }
+.editor-fields[hidden] { display: none; }
+
 .file-list,
 .event-list {
   margin: 0;
@@ -228,7 +237,6 @@ textarea { resize: vertical; }
 #saved-accounts p { flex-basis: 100%; margin: 0; }
 [data-account-id] { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
 .storage-tools { margin-top: 1rem; grid-template-columns: minmax(0, 1fr); }
-.file-upload { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #d8dde5; }
 #storage-tools-status { grid-column: 1 / -1; margin-bottom: 0; }
 #storage-tools-status:empty { display: none; }
 .file-list small { display: block; overflow-wrap: anywhere; }

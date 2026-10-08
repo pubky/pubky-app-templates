@@ -23,11 +23,6 @@ export function editorPanelHtml(
         <span id="new-file-slot">${newFileButtonHtml(editingId, busy)}</span>
       </div>
       <div id="editor">${fileFormHtml(files, editingId, space, busy, draft, lock)}</div>
-      <form id="file-upload-form" class="form-grid file-upload">
-        <label>Or upload a file <input type="file" name="file" required ${disabledAttr(Boolean(busy))} /></label>
-        <small class="muted">Store any file as bytes, up to 5 MiB.</small>
-        <button type="submit" ${disabledAttr(Boolean(busy))}>Upload ${space} file</button>
-      </form>
     </section>
   `
 }
@@ -54,8 +49,8 @@ export function updateEditor(
   draft?: FileDraft,
   lock?: FileLock,
 ) {
-  const editor = document.querySelector('#editor')
-  if (editor) editor.innerHTML = fileFormHtml(files, editingId, space, busy, draft, lock)
+  const fields = document.querySelector('#note-fields')
+  if (fields) fields.innerHTML = noteFieldsHtml(files, editingId, space, busy, draft, lock)
 
   const slot = document.querySelector('#new-file-slot')
   if (slot) slot.innerHTML = newFileButtonHtml(editingId, busy)
@@ -86,10 +81,38 @@ function fileFormHtml(
   lock?: FileLock,
 ) {
   const file = files.find((item) => item.id === editingId)
-  const destination = file ? filePath(space, file.id) : `${APP_PATHS[space]}files/`
 
   return `
     <form id="file-form" class="form-grid">
+      <fieldset class="write-modes" ${disabledAttr(Boolean(busy))}>
+        <legend>Content</legend>
+        <label><input type="radio" name="write-mode" value="note" checked ${disabledAttr(Boolean(busy))} /> Write a note</label>
+        <label><input type="radio" name="write-mode" value="file" ${disabledAttr(Boolean(busy))} /> Choose a file</label>
+      </fieldset>
+      <fieldset id="note-fields" data-write-mode="note" class="editor-fields" ${disabledAttr(Boolean(busy))}>
+        ${noteFieldsHtml(files, editingId, space, busy, draft, lock)}
+      </fieldset>
+      <fieldset id="upload-fields" data-write-mode="file" class="editor-fields" hidden disabled>
+        <label>File <input type="file" name="file" disabled /></label>
+        <small class="muted">Store any file as bytes, up to 5 MiB.</small>
+      </fieldset>
+      <button type="submit" ${disabledAttr(Boolean(busy) || Boolean(file && !lock))}>Upload</button>
+    </form>
+  `
+}
+
+function noteFieldsHtml(
+  files: AppFile[],
+  editingId: string | undefined,
+  space: StorageSpace,
+  busy?: string,
+  draft?: FileDraft,
+  lock?: FileLock,
+) {
+  const file = files.find((item) => item.id === editingId)
+  const destination = file ? filePath(space, file.id) : `${APP_PATHS[space]}files/`
+
+  return `
       <small class="file-destination muted"><code>${escapeHtml(destination)}</code></small>
       ${file ? lockControlsHtml(lock, busy) : '<small class="muted">New files use a unique filename. Existing files are locked before editing.</small>'}
       <label>
@@ -100,8 +123,6 @@ function fileFormHtml(
         Body
         <textarea name="body" rows="8">${escapeHtml(draft?.body ?? file?.body ?? '')}</textarea>
       </label>
-      <button type="submit" ${disabledAttr(Boolean(busy) || Boolean(file && !lock))}>Save ${space} file</button>
-    </form>
   `
 }
 
