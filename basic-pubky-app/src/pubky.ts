@@ -343,8 +343,12 @@ function isClosedSignupError(error: unknown) {
 }
 
 function isExpiredAuthError(error: unknown) {
-  const text = errorText(error).toLowerCase()
-  return text.includes('expired') || text.includes('timed out') || text.includes('timeout')
+  // The SDK reports relay expiry as AuthenticationError. Request errors such as
+  // a proxy's 504 Gateway Timeout leave the pending authorization resumable.
+  return (
+    isErrorNamed(error, 'AuthenticationError') &&
+    errorText(error).toLowerCase().includes('auth request has expired or was cancelled')
+  )
 }
 
 function isInvalidSavedSessionError(error: unknown) {

@@ -373,6 +373,7 @@ function handleClick(event: MouseEvent) {
       void renewEditorLock()
       break
     case 'release-file-lock':
+      captureDraft()
       void run('Releasing file lock...', async () => {
         await releaseEditorLock()
         updateEditor(

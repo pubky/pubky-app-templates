@@ -165,8 +165,36 @@ test('failed approval keeps resumable state; an expired flow removes it', async 
     fakeFlow(t, expired.promise),
   )
   const resumed = await auth.startRingAuthFlow()
-  expired.reject(new Error('Authorization link expired'))
+  expired.reject(
+    sdkError('AuthenticationError', 'The provided auth request has expired or was cancelled.'),
+  )
   await assert.rejects(resumed.awaitApproval, { name: 'RingAuthExpired' })
+  assert.equal(pending.entries().length, 0)
+})
+
+test('a relay gateway timeout retains pending state for approval retry and resume', async (t) => {
+  const approval = deferred()
+  t.mock.method(auth.pubky, 'startGrantAuthFlow', async () => fakeFlow(t, approval.promise))
+  const first = await auth.startRingAuthFlow()
+  const saved = pending.entries()
+  const timeout = Object.assign(sdkError('RequestError', 'Gateway Timeout'), {
+    data: { statusCode: 504 },
+  })
+  approval.reject(timeout)
+  await assert.rejects(first.awaitApproval, (error) => error === timeout)
+  assert.deepEqual(pending.entries(), saved)
+
+  t.mock.method(auth.pubky, 'resumeDelegatedGrantAuthFlow', async () => {
+    throw timeout
+  })
+  await assert.rejects(auth.startRingAuthFlow(), (error) => error === timeout)
+  assert.deepEqual(pending.entries(), saved)
+
+  const approvedSession = {}
+  t.mock.method(auth.pubky, 'resumeDelegatedGrantAuthFlow', async () =>
+    fakeFlow(t, Promise.resolve(approvedSession)),
+  )
+  assert.equal(await (await auth.startRingAuthFlow()).awaitApproval, approvedSession)
   assert.equal(pending.entries().length, 0)
 })
 
