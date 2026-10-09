@@ -677,14 +677,12 @@ async function connectEventStream() {
   const space = state.space
   const revision = state.revision
   requireStorageAccess(session, space)
-  let eventStream: AppEventStream | undefined = undefined
-  eventStream = await startAppEventStream(
+  const eventStream = startAppEventStream(
     session,
     space,
     (event) => {
       if (state.revision !== revision || state.space !== space || state.session !== session) return
-      // Buffered events can arrive before the subscription handle is returned.
-      if (eventStream && state.stopEventStream !== eventStream.stop) return
+      if (state.stopEventStream !== eventStream.stop) return
       state.eventCursor = event.cursor
       state.eventStreamEvents = [
         event,
@@ -1000,10 +998,9 @@ async function loadEventHistory() {
     if (state.revision !== revision) return
     state.eventStreamEvents = []
     const events: AppEvent[] = []
-    let stream: AppEventStream | undefined = undefined
-    stream = await startAppEventHistory(session, space, (event) => {
+    const stream = startAppEventHistory(session, space, (event) => {
       if (state.revision !== revision || state.session !== session || state.space !== space) return
-      if (stream && state.stopEventHistory !== stream.stop) return
+      if (state.stopEventHistory !== stream.stop) return
       events.push(event)
       state.eventStreamEvents = [...events]
       if (events.length === 1) state.eventCursor = event.cursor

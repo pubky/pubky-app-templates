@@ -16,28 +16,44 @@ export interface AppEventStream {
 
 export const EVENT_HISTORY_LIMIT = 12
 
-export async function startAppEventStream(
+export function startAppEventStream(
   session: Session,
   space: StorageSpace,
   onEvent: (event: AppEvent) => void,
   cursor: string | null = null,
-): Promise<AppEventStream> {
-  // A new live view starts at the latest event. Subsequent subscriptions resume
-  // after the last delivered cursor, including changes made while disconnected.
-  if (!cursor) {
-    const recent = await subscribe(
-      eventBuilder(session, space, null).reverse().limit(1),
-      (event) => {
-        cursor = event.cursor
-        onEvent(event)
-      },
-      session,
-      space,
-    )
-    await recent.done
+): AppEventStream {
+  let stopped = false
+  let active: AppEventStream | undefined
+
+  async function read() {
+    // A new live view starts at the latest event. Subsequent subscriptions resume
+    // after the last delivered cursor, including changes made while disconnected.
+    if (!cursor) {
+      active = subscribe(
+        eventBuilder(session, space, null).reverse().limit(1),
+        (event) => {
+          cursor = event.cursor
+          onEvent(event)
+        },
+        session,
+        space,
+      )
+      await active.done
+    }
+
+    if (stopped) return
+    active = subscribe(eventBuilder(session, space, cursor).live(), onEvent, session, space)
+    await active.done
   }
 
-  return subscribe(eventBuilder(session, space, cursor).live(), onEvent, session, space)
+  // Return cancellation before either subscription or the latest-event seed finishes.
+  return {
+    done: read(),
+    stop: async () => {
+      stopped = true
+      await active?.stop()
+    },
+  }
 }
 
 export function startAppEventHistory(
@@ -45,7 +61,7 @@ export function startAppEventHistory(
   space: StorageSpace,
   onEvent: (event: AppEvent) => void,
   cursor: string | null = null,
-): Promise<AppEventStream> {
+): AppEventStream {
   return subscribe(
     eventBuilder(session, space, cursor).reverse().limit(EVENT_HISTORY_LIMIT),
     onEvent,
@@ -64,24 +80,29 @@ function eventBuilder(session: Session, space: StorageSpace, cursor: string | nu
   return space === 'private' ? builder.session(session) : builder
 }
 
-async function subscribe(
+function subscribe(
   builder: EventStreamBuilder,
   onEvent: (event: AppEvent) => void,
   session: Session,
   space: StorageSpace,
-): Promise<AppEventStream> {
-  const eventStream = await builder.subscribe()
-
-  const reader = eventStream.getReader()
+): AppEventStream {
+  let reader: ReadableStreamDefaultReader<PubkyEvent> | undefined
   let stopped = false
   let finished = false
 
   async function read() {
+    // The SDK cannot abort subscribe() itself. If stopped while it is pending,
+    // cancel the resulting stream as soon as it arrives, without reading events.
+    const eventStream = await builder.subscribe()
+    reader = eventStream.getReader()
     try {
       while (!stopped) {
         const { done, value } = await reader.read()
         if (done) return
-        if (stopped) return
+        if (stopped) {
+          value.free()
+          return
+        }
 
         onEvent(toAppEvent(value as PubkyEvent, session, space))
       }
@@ -98,7 +119,7 @@ async function subscribe(
     stop: async () => {
       if (stopped || finished) return
       stopped = true
-      await reader.cancel()
+      await reader?.cancel()
     },
   }
 }

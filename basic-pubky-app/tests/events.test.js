@@ -45,6 +45,16 @@ function finiteStream(values) {
   })
 }
 
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 function mockSubscriptions(t, streams) {
   const subscriptions = []
   t.mock.method(pubky, 'eventStreamForUser', (publicKey, cursor) => {
@@ -159,6 +169,115 @@ test('stopping cancels a pending read, releases the reader, and is idempotent', 
   await stream.done
   assert.equal(cancel.mock.callCount(), 1)
   assert.equal(source.locked, false)
+})
+
+test('a stalled latest-event seed can be stopped before opening a live subscription', async (t) => {
+  const cancel = t.mock.fn()
+  const source = new globalThis.ReadableStream({ cancel })
+  const subscriptions = mockSubscriptions(t, [source])
+  const stream = events.startAppEventStream(session, 'public', () =>
+    assert.fail('Stopped seed must not deliver events'),
+  )
+  await Promise.resolve()
+  assert.equal(source.locked, true)
+
+  await stream.stop()
+  await stream.done
+  await stream.stop()
+
+  assert.equal(cancel.mock.callCount(), 1)
+  assert.equal(source.locked, false)
+  assert.equal(subscriptions.length, 1)
+  assert.equal(subscriptions[0].options.reverse, true)
+})
+
+for (const mode of ['seed', 'resumed live', 'history']) {
+  test(`stopping pending ${mode} establishment cancels the late stream without delivering events`, async (t) => {
+    const pending = deferred()
+    const subscriptions = mockSubscriptions(t, [pending.promise])
+    const start = mode === 'history' ? events.startAppEventHistory : events.startAppEventStream
+    const stream = start(
+      session,
+      'public',
+      () => assert.fail('Stopped subscription must not deliver events'),
+      mode === 'resumed live' ? '20' : null,
+    )
+
+    // stop() must settle even while the SDK subscription has not returned.
+    await stream.stop()
+    const cancel = t.mock.fn()
+    const source = new globalThis.ReadableStream({
+      start(controller) {
+        controller.enqueue(event('21'))
+      },
+      cancel,
+    })
+    pending.resolve(source)
+    await stream.done
+
+    assert.equal(cancel.mock.callCount(), 1)
+    assert.equal(source.locked, false)
+    assert.equal(subscriptions.length, 1)
+  })
+}
+
+test('stopping from the seed callback prevents further delivery and live startup', async (t) => {
+  const subscriptions = mockSubscriptions(t, [finiteStream([event('20'), event('19')])])
+  const received = []
+  const stream = events.startAppEventStream(session, 'public', (value) => {
+    received.push(value.cursor)
+    void stream.stop()
+  })
+  await stream.done
+
+  assert.deepEqual(received, ['20'])
+  assert.equal(subscriptions.length, 1)
+})
+
+test('stopping while live establishment follows a completed seed cancels the late stream', async (t) => {
+  const pending = deferred()
+  const establishingLive = deferred()
+  const subscriptions = mockSubscriptions(t, [
+    finiteStream([event('20')]),
+    {
+      then(resolve, reject) {
+        establishingLive.resolve()
+        return pending.promise.then(resolve, reject)
+      },
+    },
+  ])
+  const received = []
+  const stream = events.startAppEventStream(session, 'public', (value) =>
+    received.push(value.cursor),
+  )
+  await establishingLive.promise
+  await stream.stop()
+  const cancel = t.mock.fn()
+  const source = new globalThis.ReadableStream({
+    start(controller) {
+      controller.enqueue(event('21'))
+    },
+    cancel,
+  })
+  pending.resolve(source)
+  await stream.done
+
+  assert.deepEqual(received, ['20'])
+  assert.equal(subscriptions.length, 2)
+  assert.equal(subscriptions[1].cursor, '20')
+  assert.equal(cancel.mock.callCount(), 1)
+  assert.equal(source.locked, false)
+})
+
+test('subscription establishment failures reject done', async (t) => {
+  const pending = deferred()
+  const subscriptions = mockSubscriptions(t, [pending.promise])
+  const stream = events.startAppEventStream(session, 'public', () => {})
+  const failed = assert.rejects(stream.done, /Subscription failed/)
+  pending.reject(new Error('Subscription failed'))
+  await failed
+  await stream.stop()
+  assert.equal(subscriptions.length, 1)
 })
 
 test('out-of-scope events are rejected and their network stream is cancelled', async (t) => {
