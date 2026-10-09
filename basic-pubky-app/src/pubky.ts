@@ -352,8 +352,10 @@ function isExpiredAuthError(error: unknown) {
 }
 
 function isInvalidSavedSessionError(error: unknown) {
+  // SDK 0.15 also wraps browser coordination failures as AuthenticationError.
+  // Keep those records for retry; revoked sessions are reported explicitly as
+  // ClientStateError ("Browser session is no longer valid.").
   return (
-    isErrorNamed(error, 'AuthenticationError') ||
     isErrorNamed(error, 'InvalidInput') ||
     (isErrorNamed(error, 'ClientStateError') &&
       /Stored Pubky session not found:|Invalid stored session record:|Browser session was signed out\.|Browser session is no longer valid\.|Stored session identity does not match its grant\.|Delegated grant key public key does not match saved (session|flow)\./.test(

@@ -237,22 +237,31 @@ for (const failure of [
   sdkError('ClientStateError', 'Browser sessions require Web Locks in a secure context.'),
   sdkError('ClientStateError', 'Reading Pubky session failed.'),
   sdkError('ClientStateError', 'Unsupported stored session version.'),
+  sdkError(
+    'AuthenticationError',
+    'General authentication error: Browser sessions require Web Locks in a secure context.',
+  ),
+  sdkError('AuthenticationError', 'General authentication error: Reading Pubky session failed.'),
+  sdkError('AuthenticationError', 'Unknown authentication failure'),
   sdkError('NetworkError', 'Offline'),
 ]) {
   test(`restore preserves saved credentials after transient/unsupported error: ${failure.message}`, async (t) => {
     local.setItem('template:session', 'saved:grant')
+    const accounts = JSON.stringify(['saved:grant', 'other:grant'])
+    local.setItem('template:session:accounts', accounts)
     t.mock.method(BrowserSessionStore.prototype, 'restore', async () => {
       throw failure
     })
     const remove = t.mock.method(BrowserSessionStore.prototype, 'remove', async () => {})
     await assert.rejects(auth.restoreSavedSession(), (error) => error === failure)
     assert.equal(auth.getSavedSessionId(), 'saved:grant')
+    assert.equal(local.getItem('template:session:accounts'), accounts)
     assert.equal(remove.mock.callCount(), 0)
   })
 }
 
 for (const failure of [
-  sdkError('AuthenticationError', 'Grant revoked'),
+  sdkError('ClientStateError', 'Browser session is no longer valid.'),
   sdkError('ClientStateError', 'Stored Pubky session not found: saved:grant'),
   sdkError('ClientStateError', 'Browser session was signed out.'),
 ]) {
