@@ -59,7 +59,7 @@ textarea { resize: vertical; }
   padding: 1rem 2rem 2rem;
 }
 
-.panel { padding: 1rem; }
+.panel { min-width: 0; padding: 1rem; }
 .status { margin-bottom: 1rem; padding: 0.75rem 1rem; }
 .status.error { border-color: #fecdca; color: #b42318; }
 
@@ -171,6 +171,15 @@ textarea { resize: vertical; }
   font-weight: 600;
 }
 
+.write-modes,
+.editor-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.write-modes { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+.write-modes legend { margin-bottom: 0.5rem; padding: 0; font-weight: 600; }
+.write-modes label { display: inline-flex; align-items: center; font-weight: 400; }
+.write-modes input { width: auto; margin: 0; }
+.editor-fields { display: grid; gap: 1rem; }
+.editor-fields[hidden] { display: none; }
+
 .file-list,
 .event-list {
   margin: 0;
@@ -208,6 +217,7 @@ textarea { resize: vertical; }
 }
 
 .user-block button { white-space: nowrap; }
+.account-actions { display: flex; gap: 0.5rem; }
 
 .muted,
 .empty,
@@ -217,6 +227,26 @@ textarea { resize: vertical; }
 }
 
 .empty { margin: 0; }
+
+#saved-accounts nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+#saved-accounts p { flex-basis: 100%; margin: 0; }
+[data-account-id] { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.storage-tools { margin-top: 1rem; grid-template-columns: minmax(0, 1fr); }
+#storage-tools-status { grid-column: 1 / -1; margin-bottom: 0; }
+#storage-tools-status:empty { display: none; }
+.file-list small { display: block; overflow-wrap: anywhere; }
+.file-lock { display: grid; gap: 0.5rem; }
+.file-preview {
+  max-height: 18rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 @keyframes spin {
   to { transform: rotate(360deg); }
