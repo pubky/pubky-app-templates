@@ -60,8 +60,13 @@ export async function signupDevelopmentUser(homeserver: string) {
   return signer.signin(APP_CLIENT_ID)
 }
 
-export async function startRingAuthFlow(options: { fresh?: boolean } = {}): Promise<RingAuthFlow> {
-  if (!(await pubky.browserSessionStore.isAvailable())) {
+export async function startRingAuthFlow(
+  options: { fresh?: boolean } = {},
+  isCurrent: () => boolean = () => true,
+): Promise<RingAuthFlow> {
+  const available = await pubky.browserSessionStore.isAvailable()
+  if (!isCurrent()) throw ringAuthCanceledError()
+  if (!available) {
     throw new Error('Sign-in requires a secure browser context with IndexedDB and Web Locks.')
   }
   if (options.fresh) sessionStorage.removeItem(PENDING_AUTH_KEY)
@@ -78,8 +83,13 @@ export async function startRingAuthFlow(options: { fresh?: boolean } = {}): Prom
             ? pubky.resumeGrantAuthFlow(saved.state)
             : undefined
       if (!flow) throw new Error('Invalid saved sign-in mode')
+      if (!isCurrent()) {
+        flow.free()
+        throw ringAuthCanceledError()
+      }
       return awaitRingApproval(flow, pending)
     } catch (error) {
+      if (!isCurrent()) throw ringAuthCanceledError()
       // Preserve transient storage/network failures for retry; malformed or expired
       // links can be replaced. Refresh explicitly abandons any unusable saved link.
       if (
@@ -100,6 +110,7 @@ export async function startRingAuthFlow(options: { fresh?: boolean } = {}): Prom
   })
   let saved: string
   try {
+    if (!isCurrent()) throw ringAuthCanceledError()
     try {
       saved = JSON.stringify({ mode: 'delegated', state: flow.saveDelegated() })
     } catch (error) {
@@ -121,12 +132,19 @@ export function getSavedSessionId() {
   return localStorage.getItem(SESSION_KEY)
 }
 
-export async function saveSession(session: Session, isCurrent: () => boolean = () => true) {
+export async function saveSession(
+  session: Session,
+  isCurrent: () => boolean = () => true,
+  beforeSelect?: () => Promise<unknown>,
+) {
   const stored = await pubky.browserSessionStore.save(session)
   try {
+    if (beforeSelect) await beforeSelect()
     rememberAccount(stored.id)
-    if (isCurrent()) localStorage.setItem(SESSION_KEY, stored.id)
+    const selected = isCurrent()
+    if (selected) localStorage.setItem(SESSION_KEY, stored.id)
     sessionIds.set(session, stored.id)
+    return selected
   } finally {
     stored.free()
   }

@@ -7,6 +7,7 @@ import { createServer } from 'vite'
 let server
 let auth
 let config
+let lifecycle
 const memoryStorage = () => {
   const values = new Map()
   return {
@@ -86,6 +87,7 @@ before(async () => {
   })
   auth = await server.ssrLoadModule('/src/pubky.ts')
   config = await server.ssrLoadModule('/src/config.ts')
+  lifecycle = await server.ssrLoadModule('/src/ring-auth-lifecycle.ts')
 })
 
 after(async () => {
@@ -138,6 +140,215 @@ test('pending delegated sign-in survives reload, resumes, and is removed after a
   assert.equal(start.mock.callCount(), 1)
   assert.equal(pending.entries().length, 0)
   firstApproval.resolve({})
+})
+
+test('a superseded startup finishing last preserves the current pending link', async (t) => {
+  const olderStart = deferred()
+  const olderStarted = deferred()
+  const older = fakeFlow(t, deferred().promise)
+  older.saveDelegated = t.mock.fn(() => 'older-state')
+  older.awaitApproval = t.mock.fn()
+  const current = fakeFlow(t, deferred().promise)
+  current.saveDelegated = () => 'current-state'
+  let currentToken = 'older'
+  let starts = 0
+  t.mock.method(auth.pubky, 'startGrantAuthFlow', () => {
+    if (++starts === 1) {
+      olderStarted.resolve()
+      return olderStart.promise
+    }
+    return Promise.resolve(current)
+  })
+  const olderResult = auth.startRingAuthFlow({}, () => currentToken === 'older')
+  await olderStarted.promise
+  currentToken = 'current'
+  const currentFlow = await auth.startRingAuthFlow({}, () => currentToken === 'current')
+  const saved = pending.entries()
+  assert.equal(JSON.parse(saved[0][1]).state, 'current-state')
+
+  const canceled = assert.rejects(olderResult, { name: 'RingAuthCanceled' })
+  olderStart.resolve(older)
+  await canceled
+  assert.deepEqual(pending.entries(), saved)
+  assert.equal(older.saveDelegated.mock.callCount(), 0)
+  assert.equal(older.awaitApproval.mock.callCount(), 0)
+  assert.equal(older.free.mock.callCount(), 1)
+  assert.equal(current.free.mock.callCount(), 0)
+  currentFlow.suspend()
+})
+
+for (const expired of [false, true]) {
+  test(`a superseded resume ${expired ? 'failure' : 'success'} preserves the current waiter and saved link`, async (t) => {
+    pending.setItem(
+      'template:session:pending-auth',
+      JSON.stringify({ mode: 'delegated', state: 'shared-state' }),
+    )
+    const olderResume = deferred()
+    const olderResuming = deferred()
+    const older = fakeFlow(t, deferred().promise)
+    older.awaitApproval = t.mock.fn()
+    const current = fakeFlow(t, deferred().promise)
+    let currentToken = 'older'
+    let resumes = 0
+    const start = t.mock.method(auth.pubky, 'startGrantAuthFlow', async () => fakeFlow(t))
+    t.mock.method(auth.pubky, 'resumeDelegatedGrantAuthFlow', () => {
+      if (++resumes === 1) {
+        olderResuming.resolve()
+        return olderResume.promise
+      }
+      return Promise.resolve(current)
+    })
+    const olderResult = auth.startRingAuthFlow({}, () => currentToken === 'older')
+    await olderResuming.promise
+    currentToken = 'current'
+    const currentFlow = await auth.startRingAuthFlow({}, () => currentToken === 'current')
+    const saved = pending.entries()
+
+    const canceled = assert.rejects(olderResult, { name: 'RingAuthCanceled' })
+    if (expired) {
+      olderResume.reject(
+        sdkError('AuthenticationError', 'The provided auth request has expired or was cancelled.'),
+      )
+    } else {
+      olderResume.resolve(older)
+    }
+    await canceled
+    assert.deepEqual(pending.entries(), saved)
+    assert.equal(older.awaitApproval.mock.callCount(), 0)
+    assert.equal(older.free.mock.callCount(), expired ? 0 : 1)
+    assert.equal(current.free.mock.callCount(), 0)
+    assert.equal(start.mock.callCount(), 0)
+    currentFlow.suspend()
+  })
+}
+
+test('a superseded fresh startup cannot remove state after its availability check', async (t) => {
+  const available = deferred()
+  let current = true
+  t.mock.method(BrowserSessionStore.prototype, 'isAvailable', () => available.promise)
+  const start = t.mock.method(auth.pubky, 'startGrantAuthFlow', async () => fakeFlow(t))
+  const resume = t.mock.method(auth.pubky, 'resumeDelegatedGrantAuthFlow', async () => fakeFlow(t))
+  const result = auth.startRingAuthFlow({ fresh: true }, () => current)
+  current = false
+  pending.setItem(
+    'template:session:pending-auth',
+    JSON.stringify({ mode: 'delegated', state: 'current-state' }),
+  )
+  const saved = pending.entries()
+  const canceled = assert.rejects(result, { name: 'RingAuthCanceled' })
+  available.resolve(true)
+  await canceled
+  assert.deepEqual(pending.entries(), saved)
+  assert.equal(start.mock.callCount(), 0)
+  assert.equal(resume.mock.callCount(), 0)
+})
+
+for (const failed of [false, true]) {
+  test(`cached-page approval ${failed ? 'failure' : 'success'} waits for visibility without restarting its waiter`, async (t) => {
+    const approval = deferred()
+    const sdkFlow = fakeFlow(t, approval.promise)
+    sdkFlow.awaitApproval = t.mock.fn(() => approval.promise)
+    const start = t.mock.method(auth.pubky, 'startGrantAuthFlow', async () => sdkFlow)
+    const attempt = lifecycle.createRingAuthAttempt(auth.getSavedSessionId, () => true)
+    const flow = await auth.startRingAuthFlow({}, attempt.isCurrent)
+    let applied = false
+    const apply = async () => {
+      if (await attempt.waitUntilVisible()) applied = true
+    }
+    const handled = flow.awaitApproval.then(apply, apply)
+    attempt.pause()
+    if (failed) approval.reject(new Error('Relay unavailable'))
+    else approval.resolve({})
+    await flow.awaitApproval.catch(() => {})
+    assert.equal(applied, false)
+    assert.equal(attempt.isCurrent(), true)
+    attempt.resume()
+    await handled
+    assert.equal(applied, true)
+    assert.equal(start.mock.callCount(), 1)
+    assert.equal(sdkFlow.awaitApproval.mock.callCount(), 1)
+  })
+}
+
+test('a cached page retains in-flight startup and validates selection before approval', async (t) => {
+  const started = deferred()
+  const startup = deferred()
+  const approval = deferred()
+  const sdkFlow = fakeFlow(t, approval.promise)
+  sdkFlow.awaitApproval = t.mock.fn(() => approval.promise)
+  const start = t.mock.method(auth.pubky, 'startGrantAuthFlow', () => {
+    started.resolve()
+    return startup.promise
+  })
+  let active = true
+  const attempt = lifecycle.createRingAuthAttempt(auth.getSavedSessionId, () => active)
+  const result = auth.startRingAuthFlow({}, attempt.isCurrent)
+  await started.promise
+  attempt.pause()
+  startup.resolve(sdkFlow)
+  const flow = await result
+  assert.equal(sdkFlow.free.mock.callCount(), 0)
+  assert.equal(pending.entries().length, 1)
+  let applied = false
+  const handled = flow.awaitApproval.then(async () => {
+    if (await attempt.waitUntilVisible()) applied = true
+  })
+  approval.resolve({})
+  await flow.awaitApproval
+  local.setItem('template:session', 'other:grant')
+  assert.equal(attempt.isCurrent(), false)
+  // The page invalidates its token before releasing the cached handler.
+  active = false
+  attempt.cancel()
+  await handled
+  assert.equal(applied, false)
+  assert.equal(auth.getSavedSessionId(), 'other:grant')
+  assert.equal(start.mock.callCount(), 1)
+  assert.equal(sdkFlow.awaitApproval.mock.callCount(), 1)
+})
+
+for (const selectionChanged of [false, true]) {
+  test(`persistence finishing in a cached page ${selectionChanged ? 'preserves a changed selection' : 'selects only after restore'}`, async (t) => {
+    const stored = deferred()
+    const savedRecord = record('approved:grant')
+    savedRecord.free = t.mock.fn()
+    const save = t.mock.method(BrowserSessionStore.prototype, 'save', () => stored.promise)
+    let active = true
+    const attempt = lifecycle.createRingAuthAttempt(auth.getSavedSessionId, () => active)
+    const result = auth.saveSession({}, attempt.isCurrent, attempt.waitUntilVisible)
+    attempt.pause()
+    stored.resolve(savedRecord)
+    await stored.promise
+    assert.equal(auth.getSavedSessionId(), null)
+    assert.equal(savedRecord.free.mock.callCount(), 0)
+    if (selectionChanged) {
+      local.setItem('template:session', 'other:grant')
+      assert.equal(attempt.isCurrent(), false)
+      active = false
+      attempt.cancel()
+    } else {
+      assert.equal(attempt.isCurrent(), true)
+      attempt.resume()
+    }
+    assert.equal(await result, !selectionChanged)
+    assert.equal(auth.getSavedSessionId(), selectionChanged ? 'other:grant' : 'approved:grant')
+    assert.equal(save.mock.callCount(), 1)
+    assert.equal(savedRecord.free.mock.callCount(), 1)
+  })
+}
+
+test('real unload cancels in-flight startup without abandoning saved resumable state', async (t) => {
+  const available = deferred()
+  t.mock.method(BrowserSessionStore.prototype, 'isAvailable', () => available.promise)
+  const saved = JSON.stringify({ mode: 'delegated', state: 'saved-state' })
+  pending.setItem('template:session:pending-auth', saved)
+  const attempt = lifecycle.createRingAuthAttempt(auth.getSavedSessionId, () => true)
+  const result = auth.startRingAuthFlow({}, attempt.isCurrent)
+  attempt.cancel()
+  const canceled = assert.rejects(result, { name: 'RingAuthCanceled' })
+  available.resolve(true)
+  await canceled
+  assert.equal(pending.getItem('template:session:pending-auth'), saved)
 })
 
 test('explicit cancellation rejects immediately and abandons the pending link', async (t) => {

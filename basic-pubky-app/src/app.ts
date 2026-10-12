@@ -22,6 +22,7 @@ import { eventStreamPanelHtml, updateEventList, updateEventStreamToggle } from '
 import { editorPanelHtml, filesPanelHtml, updateEditor, updateFilesList } from './files-ui'
 import { captureFileDraft, reconcileFileDraft, type FileDraft } from './file-drafts'
 import { storageSpacesHtml } from './spaces-ui'
+import { createRingAuthAttempt, type RingAuthAttempt } from './ring-auth-lifecycle'
 import {
   copyTextToClipboard,
   disabledAttr,
@@ -108,6 +109,8 @@ const state: State = {
 
 let app: HTMLElement
 let activeOperation: symbol | undefined
+let ringAttempt: RingAuthAttempt | undefined
+let pageSuspended = false
 
 export function start(root: HTMLElement) {
   app = root
@@ -118,6 +121,8 @@ export function start(root: HTMLElement) {
     if (input instanceof HTMLInputElement && input.name === 'write-mode') syncControls()
   })
   subscribeSavedSessionChanges((change) => {
+    // pageshow validates the selected account before unblocking a cached waiter.
+    if (pageSuspended) return
     if (change.type === 'accounts') {
       void refreshSavedAccounts()
       return
@@ -132,15 +137,25 @@ export function start(root: HTMLElement) {
     void init()
   })
   window.addEventListener('pageshow', (event) => {
+    pageSuspended = false
     if (event.persisted) {
-      state.ringAuthFlow = undefined
+      if (ringAttempt?.isCurrent()) {
+        ringAttempt.resume()
+        return
+      }
       resetWorkspace()
       mount()
       void init()
     }
   })
-  window.addEventListener('pagehide', () => {
-    state.ringAuthFlow?.suspend()
+  window.addEventListener('pagehide', (event) => {
+    pageSuspended = true
+    if (event.persisted) {
+      ringAttempt?.pause()
+    } else {
+      ringAttempt?.cancel()
+      state.ringAuthFlow?.suspend()
+    }
     void stopEventStream()
     void stopEventHistory()
     void releaseEditorLock()
@@ -418,14 +433,17 @@ async function refreshRingSignin(preserveError = false, fresh = false) {
     loading: true,
     token,
   }
+  const attempt = createRingAuthAttempt(getSavedSessionId, () => isActiveRingSignin(token))
+  if (pageSuspended) attempt.pause()
+  ringAttempt = attempt
   if (!preserveError) state.error = undefined
   updateStatus()
   updateRingPanel(state.ringSignin, state.busy)
   syncControls()
 
   try {
-    const flow = await startRingAuthFlow({ fresh })
-    if (!isActiveRingSignin(token)) {
+    const flow = await startRingAuthFlow({ fresh }, attempt.isCurrent)
+    if (!attempt.isCurrent()) {
       flow.cancel()
       return
     }
@@ -438,9 +456,9 @@ async function refreshRingSignin(preserveError = false, fresh = false) {
     updateRingPanel(state.ringSignin, state.busy)
     syncControls()
 
-    void handleRingApproval(flow, token)
+    void handleRingApproval(flow, token, attempt)
   } catch (error) {
-    if (!isActiveRingSignin(token)) return
+    if (!(await attempt.waitUntilVisible())) return
 
     state.ringAuthFlow = undefined
     state.ringSignin = {}
@@ -451,20 +469,30 @@ async function refreshRingSignin(preserveError = false, fresh = false) {
   }
 }
 
-async function handleRingApproval(flow: RingAuthFlow, token: symbol) {
+async function handleRingApproval(flow: RingAuthFlow, token: symbol, attempt: RingAuthAttempt) {
   try {
     const session = await flow.awaitApproval
-    if (!isActiveRingSignin(token)) return
+    if (!(await attempt.waitUntilVisible())) return
 
     state.ringAuthFlow = undefined
     const revision = state.revision
     await run('Completing Pubky Ring sign-in...', async () => {
-      await saveSession(session, () => state.revision === revision)
-      if (state.revision !== revision) return
+      let selected: boolean
+      try {
+        selected = await saveSession(
+          session,
+          () => state.revision === revision && attempt.isCurrent(),
+          attempt.waitUntilVisible,
+        )
+      } catch (error) {
+        if (await attempt.waitUntilVisible()) throw error
+        return
+      }
+      if (!selected || state.revision !== revision || !isActiveRingSignin(token)) return
       await activateSession(session, 'Signed in with Pubky Ring.')
     })
   } catch (error) {
-    if (isRingAuthCanceled(error) || !isActiveRingSignin(token)) return
+    if (isRingAuthCanceled(error) || !(await attempt.waitUntilVisible())) return
 
     state.ringAuthFlow = undefined
     state.ringSignin = isRingAuthExpired(error) ? { expired: true, token } : {}
@@ -799,6 +827,8 @@ function cancelRingSignin() {
   const flow = state.ringAuthFlow
   state.ringAuthFlow = undefined
   state.ringSignin = {}
+  ringAttempt?.cancel()
+  ringAttempt = undefined
   flow?.cancel()
 }
 
