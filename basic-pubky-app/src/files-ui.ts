@@ -2,11 +2,7 @@ import { APP_PATHS, type StorageSpace } from './config'
 import { disabledAttr, escapeHtml, formatDate } from './html'
 import { filePath, type AppFile, type FileLock } from './storage'
 import { uploadedFilePath, type UploadedFile } from './storage-tools-data'
-
-export interface FileDraft {
-  title: string
-  body: string
-}
+import type { FileDraft } from './file-drafts'
 
 export function editorPanelHtml(
   files: AppFile[],

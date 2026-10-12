@@ -19,13 +19,8 @@ import {
   type AppEventStream,
 } from './events'
 import { eventStreamPanelHtml, updateEventList, updateEventStreamToggle } from './events-ui'
-import {
-  editorPanelHtml,
-  filesPanelHtml,
-  updateEditor,
-  updateFilesList,
-  type FileDraft,
-} from './files-ui'
+import { editorPanelHtml, filesPanelHtml, updateEditor, updateFilesList } from './files-ui'
+import { captureFileDraft, reconcileFileDraft, type FileDraft } from './file-drafts'
 import { storageSpacesHtml } from './spaces-ui'
 import {
   copyTextToClipboard,
@@ -91,7 +86,7 @@ interface State {
   files: AppFile[]
   uploads: UploadedFile[]
   space: StorageSpace
-  drafts: Partial<Record<StorageSpace, FileDraft & { editingId?: string }>>
+  drafts: Partial<Record<StorageSpace, FileDraft>>
   ringAuthFlow?: RingAuthFlow
   ringSignin: RingSigninState
   session?: Session
@@ -700,12 +695,16 @@ async function connectEventStream() {
 function captureDraft() {
   const form = app.querySelector<HTMLFormElement>('#file-form')
   if (!form) return
-  state.drafts[state.space] = {
-    editingId: state.editingId,
-    // Read values directly: inactive note fields are deliberately omitted from FormData.
-    title: form.querySelector<HTMLInputElement>('input[name="title"]')?.value ?? '',
-    body: form.querySelector<HTMLTextAreaElement>('textarea[name="body"]')?.value ?? '',
-  }
+  state.drafts[state.space] = captureFileDraft(
+    {
+      editingId: state.editingId,
+      // Read values directly: inactive note fields are deliberately omitted from FormData.
+      title: form.querySelector<HTMLInputElement>('input[name="title"]')?.value ?? '',
+      body: form.querySelector<HTMLTextAreaElement>('textarea[name="body"]')?.value ?? '',
+    },
+    state.files.find((file) => file.id === state.editingId),
+    state.drafts[state.space],
+  )
 }
 
 async function switchStorageSpace(space: StorageSpace) {
@@ -926,6 +925,7 @@ async function editFile(id: string) {
   const session = requireSession()
   const space = state.space
   const revision = state.revision
+  captureDraft()
   await run('Locking file for editing...', async () => {
     await releaseEditorLock()
     if (state.revision !== revision) return
@@ -937,9 +937,19 @@ async function editFile(id: string) {
     state.fileLock = lock
     state.files = state.files.map((existing) => (existing.id === id ? file : existing))
     state.editingId = id
-    delete state.drafts[space]
+    const { draft, conflict } = reconcileFileDraft(file, state.drafts[space])
+    state.drafts[space] = draft
+    if (conflict) {
+      await releaseEditorLock()
+      if (state.revision !== revision) return
+    }
     selectNoteMode()
-    updateEditor(state.files, id, space, state.busy, undefined, lock)
+    updateEditor(state.files, id, space, state.busy, draft, state.fileLock)
+    if (conflict) {
+      throw new Error(
+        'The file changed since you started editing. Your unsaved text is still here. Copy it first, then select New and reopen the file with Lock & edit to review the latest version.',
+      )
+    }
     setNotice('File locked. Save before the lease expires, or renew the lock.')
   })
 }

@@ -76,6 +76,8 @@ Editing an existing note acquires a WebDAV lock and reads the current file befor
 
 Locks prevent competing writes while held; they do not merge edits. Contention, expired locks, and unsupported Homeservers are reported instead of silently writing without a lock. If a lock expires, acquire a new lock and reread the file before editing again. If the connection is lost during acquisition, a server-side lock may remain until its timeout. This example requires a Homeserver with WebDAV lock support, available in version 0.15.
 
+Reacquiring a lock preserves your unsaved draft if the file has not changed, including after switching storage spaces. If the file changed, the editor keeps your text visible and blocks saving. Copy your draft, select **New**, then **Lock & edit** to review the latest file before applying your changes.
+
 ### Uploads and Public Reads
 
 The Editor offers **Write a file** or **Choose a file**, with one **Upload** button at the bottom. The selected mode uploads either the title and body as a JSON note or the selected file's bytes, never both. Switching modes preserves your draft and file selection while keeping the inactive fields disabled. The public/private selector above the editor sets the destination for either mode.

@@ -8,6 +8,7 @@ let server
 let storage
 let access
 let filesUi
+let fileDrafts
 const owner = Keypair.random().publicKey
 const otherOwner = Keypair.random().publicKey
 const directories = {
@@ -27,10 +28,66 @@ before(async () => {
   storage = await server.ssrLoadModule('/src/storage.ts')
   access = await server.ssrLoadModule('/src/access.ts')
   filesUi = await server.ssrLoadModule('/src/files-ui.ts')
+  fileDrafts = await server.ssrLoadModule('/src/file-drafts.ts')
 })
 
 after(async () => {
   await server?.close()
+})
+
+test('reacquiring an unchanged file preserves unsaved text and the original baseline', () => {
+  const file = { id: 'note', title: 'Original', body: 'Original body', updatedAt: '2026-01-01' }
+  const opened = fileDrafts.reconcileFileDraft(file).draft
+  const draft = fileDrafts.captureFileDraft(
+    { editingId: file.id, title: 'Unsaved title', body: 'Unsaved body' },
+    file,
+    opened,
+  )
+  const restored = fileDrafts.reconcileFileDraft({ ...file }, draft)
+  assert.equal(restored.conflict, false)
+  assert.equal(restored.draft.title, 'Unsaved title')
+  assert.equal(restored.draft.body, 'Unsaved body')
+  assert.deepEqual(restored.draft.baseline, file)
+})
+
+test('refreshing a list never replaces a suspended draft baseline', () => {
+  const file = { id: 'note', title: 'Original', body: 'Original body', updatedAt: '2026-01-01' }
+  const opened = fileDrafts.reconcileFileDraft(file).draft
+  const draft = fileDrafts.captureFileDraft(
+    { editingId: file.id, title: file.title, body: 'My unsaved changes' },
+    { ...file, body: 'Another editor changed this', updatedAt: '2026-01-02' },
+    opened,
+  )
+  assert.deepEqual(draft.baseline, file)
+  for (const changed of [
+    { ...file, title: 'Changed title' },
+    { ...file, body: 'Changed body' },
+    { ...file, updatedAt: '2026-01-02' },
+  ]) {
+    const result = fileDrafts.reconcileFileDraft(changed, draft)
+    assert.equal(result.conflict, true)
+    assert.equal(result.draft.body, 'My unsaved changes')
+    assert.deepEqual(result.draft.baseline, file)
+    // Retrying cannot silently rebase an unresolved conflict onto the latest file.
+    assert.equal(fileDrafts.reconcileFileDraft(changed, result.draft).conflict, true)
+  }
+})
+
+test('clean drafts adopt the latest file and drafts for other files do not carry over', () => {
+  const original = { id: 'note', title: 'Original', body: 'Original body', updatedAt: '2026-01-01' }
+  const clean = fileDrafts.reconcileFileDraft(original).draft
+  const latest = { ...original, body: 'Latest body', updatedAt: '2026-01-02' }
+  const refreshed = fileDrafts.reconcileFileDraft(latest, clean)
+  assert.equal(refreshed.conflict, false)
+  assert.equal(refreshed.draft.body, latest.body)
+  assert.deepEqual(refreshed.draft.baseline, latest)
+  const other = fileDrafts.reconcileFileDraft(
+    { ...latest, id: 'other' },
+    { ...clean, body: 'Unsaved body for note' },
+  )
+  assert.equal(other.conflict, false)
+  assert.equal(other.draft.body, latest.body)
+  assert.equal(other.draft.editingId, 'other')
 })
 
 test('the shared file list keeps uploaded JSON out of the note editor', () => {
