@@ -64,7 +64,6 @@ import {
   type AppFile,
   type FileLock,
 } from './storage'
-import { storageToolsPanelHtml, createStorageTools } from './storage-tools'
 import { downloadBytes } from './storage-download'
 import {
   deleteUploadedFile,
@@ -113,7 +112,6 @@ const state: State = {
 }
 
 let app: HTMLElement
-let toolsPanel: ReturnType<typeof createStorageTools> | undefined
 let activeOperation: symbol | undefined
 
 export function start(root: HTMLElement) {
@@ -148,7 +146,6 @@ export function start(root: HTMLElement) {
   })
   window.addEventListener('pagehide', () => {
     state.ringAuthFlow?.suspend()
-    toolsPanel?.dispose()
     void stopEventStream()
     void stopEventHistory()
     void releaseEditorLock()
@@ -172,23 +169,26 @@ async function init() {
 }
 
 function mount() {
-  toolsPanel?.dispose()
   const session = state.session
 
   app.innerHTML = `
     <main class="app-shell">
       <header class="app-header">
-        <h1>Pubky App Template</h1>
+        <div>
+          <h1>Pubky App Template</h1>
+          <nav class="page-nav" aria-label="Pages">
+            <strong aria-current="page">Your files</strong> · <a href="./public-reader.html">Public file reader</a>
+          </nav>
+        </div>
         ${session ? signedInHeader(session) : ''}
       </header>
       <div id="status">${statusHtml()}</div>
       <div id="saved-accounts">${savedAccountsHtml()}</div>
-      <div id="view">${session ? signedInViewHtml() : authViewHtml(state.ringSignin, state.busy) + storageToolsPanelHtml()}</div>
+      <div id="view">${session ? signedInViewHtml() : authViewHtml(state.ringSignin, state.busy)}</div>
       <footer class="app-footer">Built with <a href="https://www.npmjs.com/package/@synonymdev/pubky">Pubky SDK</a> v${pubkySdkVersion}</footer>
     </main>
   `
 
-  mountStorageTools()
   void renderRingSigninQr(state.ringSignin)
   syncControls()
 }
@@ -215,15 +215,12 @@ function signedInViewHtml() {
       ${filesPanelHtml(state.files, state.space, state.busy, state.uploads)}
       ${eventStreamPanelHtml(state.eventStreamEvents, Boolean(state.stopEventStream), state.space, state.busy)}
     </section>
-    ${storageToolsPanelHtml()}
   `
 }
 
 function renderWorkspace() {
-  toolsPanel?.dispose()
   const view = app.querySelector('#view')
   if (view) view.innerHTML = signedInViewHtml()
-  mountStorageTools()
   syncControls()
 }
 
@@ -257,7 +254,6 @@ function syncControls() {
   )?.value
 
   for (const button of app.querySelectorAll('button')) {
-    if (button.closest('#storage-tools')) continue
     if (button.dataset.accountId) {
       button.disabled = busy || button.dataset.accountId === getSavedSessionId()
       continue
@@ -309,7 +305,7 @@ function handleClick(event: MouseEvent) {
   }
 
   const button = target.closest<HTMLButtonElement>('button')
-  if (!button || state.busy || button.closest('#storage-tools')) return
+  if (!button || state.busy) return
   if (button.dataset.accountId) {
     void switchAccount(button.dataset.accountId)
     return
@@ -410,7 +406,7 @@ function handleSubmit(event: SubmitEvent) {
   if (!(form instanceof HTMLFormElement)) return
 
   event.preventDefault()
-  if (state.busy || form.closest('#storage-tools') || state.logoutPending) return
+  if (state.busy || state.logoutPending) return
   if (form.id === 'development-signup-form') void handleDevelopmentSignup(form)
   if (form.id === 'file-form') {
     const mode = new FormData(form).get('write-mode')
@@ -636,7 +632,6 @@ async function handleSignOut() {
   const session = state.session
   if (!session) return
   state.logoutPending = true
-  toolsPanel?.dispose()
   state.files = []
   state.uploads = []
   state.drafts = {}
@@ -880,18 +875,12 @@ async function refreshSavedAccounts() {
   if (container) container.innerHTML = savedAccountsHtml()
 }
 
-function mountStorageTools() {
-  const container = app.querySelector<HTMLElement>('#storage-tools')
-  toolsPanel = container ? createStorageTools(container) : undefined
-}
-
 function resetWorkspace() {
   state.revision += 1
   activeOperation = undefined
   state.busy = undefined
   state.quietBusy = undefined
   cancelRingSignin()
-  toolsPanel?.dispose()
   void stopEventStream()
   void stopEventHistory()
   void releaseEditorLock()

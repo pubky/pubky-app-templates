@@ -79,6 +79,7 @@ textarea { resize: vertical; }
 }
 
 .app-header { align-items: flex-start; margin-bottom: 0.75rem; }
+.page-nav { margin-top: 0.5rem; }
 .app-footer { margin-top: 1rem; color: #667085; font-size: 0.8rem; text-align: center; }
 .section-header { margin-bottom: 1rem; }
 .pubky-id { margin: 0; overflow-wrap: anywhere; font-family: monospace; }

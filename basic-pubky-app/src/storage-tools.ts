@@ -8,8 +8,8 @@ export function storageToolsPanelHtml() {
   return `
     <section id="storage-tools" class="grid storage-tools">
       <section class="panel">
-        <h2>Read a public file</h2>
-        <p class="muted">Read anyone’s public Pubky file without signing in. Private files cannot be shared this way.</p>
+        <h2>Read any public file</h2>
+        <p class="muted">Read any public Pubky file. No sign-in required. Private files cannot be shared this way.</p>
         <form id="public-reader" class="form-grid">
           <label>Pubky file address <input name="address" type="text" placeholder="pubky://&lt;key&gt;/pub/app/file.json" required spellcheck="false" autocomplete="off" /></label>
           <button type="submit">Read public file</button>

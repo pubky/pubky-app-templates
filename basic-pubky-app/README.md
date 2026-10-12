@@ -84,7 +84,7 @@ Both appear in the same Files list. Notes support editing with locks; uploads ca
 
 The reusable `uploadFileBytes(session, space, file)` function in [`src/storage-tools-data.ts`](src/storage-tools-data.ts) demonstrates `session.storage.putBytes`; note creation in [`src/storage.ts`](src/storage.ts) demonstrates `session.storage.putJson`. Uploads and public reads have a 5 MiB limit. Uploaded files keep unique names under `/pub/template/attachments/` or `/priv/template/attachments/` so previous uploads remain accessible. Those folder names are a template convention, not a distinct SDK storage type; the public/private access rules apply to notes and uploads equally. File metadata describes the stored resource; downloaded content is treated as a file rather than executed in the page.
 
-Copy a public file's Pubky address to share it. The public reader works without signing in and accepts public Pubky resource addresses. It does not grant access to private resources or provide selected-recipient sharing.
+Copy a public file's Pubky address to share it. Open **Public file reader** in the navigation to read it on a separate page, without signing in. The reader accepts public Pubky resource addresses; it does not grant access to private resources or provide selected-recipient sharing. **Your files** returns to the account workspace or sign-in screen. These are ordinary page links, so save editor changes before switching pages.
 
 ### Event History
 
