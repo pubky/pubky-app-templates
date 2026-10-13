@@ -38,10 +38,12 @@ export async function listUploadedFiles(
         if (
           resource.owner.z32() !== session.info.publicKey.z32() ||
           !resource.path.startsWith(directory) ||
-          name.includes('/')
+          name.replace(/\/$/, '').includes('/')
         ) {
           throw new Error('The homeserver returned a file outside the selected folder.')
         }
+        // Shallow listings include child directories; this example only displays files.
+        if (name.endsWith('/')) continue
         if (isUploadedFileName(name)) names.push(name)
       }
       const next = urls.at(-1)
@@ -89,9 +91,7 @@ export async function readUploadedFile(
   if (!metadata) throw new Error('This file no longer exists.')
   if (metadata.contentLength !== undefined) checkByteLength(metadata.contentLength)
   requireCurrent(isCurrent)
-  const bytes = await session.storage.getBytes(path)
-  checkByteLength(bytes.byteLength)
-  return bytes
+  return readLimitedResponse(await session.storage.get(path), isCurrent)
 }
 
 export async function deleteUploadedFile(session: Session, space: StorageSpace, name: string) {
@@ -152,13 +152,17 @@ export async function readLimitedResponse(
   isCurrent: () => boolean = () => true,
 ) {
   const reader = response.body?.getReader()
-  if (!reader) return new Uint8Array()
+  if (!reader) {
+    requireCurrent(isCurrent)
+    return new Uint8Array()
+  }
   const chunks: Uint8Array[] = []
   let length = 0
   try {
     while (true) {
       requireCurrent(isCurrent)
       const { value, done } = await reader.read()
+      requireCurrent(isCurrent)
       if (done) break
       length += value.byteLength
       checkByteLength(length)

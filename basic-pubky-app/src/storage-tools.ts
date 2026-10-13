@@ -1,6 +1,6 @@
 import type { ResourceStats } from '@synonymdev/pubky'
 import { escapeHtml, formatError } from './html'
-import { pubky } from './pubky'
+import { pubky } from './client'
 import { downloadBytes } from './storage-download'
 import { readPublicFile } from './storage-tools-data'
 

@@ -84,6 +84,8 @@ The Editor offers **Write a file** or **Choose a file**, with one **Upload** but
 
 Both appear in the same Files list. Notes support editing with locks; uploads can be downloaded or deleted without interpreting their contents as note JSON, even if the uploaded filename ends in `.json`. Uploading a file preserves the current note draft.
 
+A completed save, upload, or deletion updates the form and file list immediately. If refreshing the list then fails, the app keeps the success message and reports the refresh failure separately; the completed operation does not need to be repeated.
+
 The reusable `uploadFileBytes(session, space, file)` function in [`src/storage-tools-data.ts`](src/storage-tools-data.ts) demonstrates `session.storage.putBytes`; note creation in [`src/storage.ts`](src/storage.ts) demonstrates `session.storage.putJson`. Uploads and public reads have a 5 MiB limit. Uploaded files keep unique names under `/pub/template/attachments/` or `/priv/template/attachments/` so previous uploads remain accessible. Those folder names are a template convention, not a distinct SDK storage type; the public/private access rules apply to notes and uploads equally. File metadata describes the stored resource; downloaded content is treated as a file rather than executed in the page.
 
 Copy a public file's Pubky address to share it. Open **Public file reader** in the navigation to read it on a separate page, without signing in. The reader accepts public Pubky resource addresses; it does not grant access to private resources or provide selected-recipient sharing. **Your files** returns to the account workspace or sign-in screen. These are ordinary page links, so save editor changes before switching pages.
@@ -116,3 +118,13 @@ sessions separate.
 ## Checks
 
 Run `npm test` for session persistence and cancellation, capability boundaries, file locks and storage, public resource validation, and event history/stream cleanup. These tests use the existing Vite tooling and Node's test runner; they do not need a running Homeserver. Run `npm run build` to type-check and build the app.
+
+The parent repository also runs Chromium and Firefox regression tests in CI. They exercise the real UI with controlled SDK responses, including failed writes, successful writes followed by failed refreshes, downloads, and page navigation. The browser tooling and fixtures live outside this template, so copying it does not add browser-test dependencies. These tests complement live testnet checks; they do not replace SDK/Homeserver integration testing.
+
+## Keeping Only the Examples You Need
+
+`src/client.ts` creates the shared SDK client; `src/pubky.ts` contains account and sign-in functions. The public reader and event helpers use the client directly and do not import the account controller.
+
+- To remove the public reader, delete `public-reader.html`, `src/public-reader.ts`, and `src/storage-tools.ts`; remove its navigation link in `src/app.ts` and its entry in `vite.config.js`.
+- To keep only the public reader, remove `index.html`, `src/main.ts`, and `src/app.ts`, remove the account entry from `vite.config.js`, then remove the **Your files** link. The reader imports only the shared SDK setup and file helpers; unused account helpers and their tests can also be deleted together.
+- To remove an account-page example, remove its panel, imports, and event handlers together. Shared file helpers are ordinary functions, with no feature registry or required initialization order. Panel update functions tolerate absent panel elements.

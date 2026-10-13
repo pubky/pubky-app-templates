@@ -1,13 +1,13 @@
-import { AuthFlowKind, Keypair, Pubky, PublicKey } from '@synonymdev/pubky'
+import { AuthFlowKind, Keypair, PublicKey } from '@synonymdev/pubky'
 import type { GrantAuthFlow, Session } from '@synonymdev/pubky'
+import { pubky } from './client'
+export { pubky } from './client'
 import {
   APP_CAPABILITIES,
   APP_CLIENT_ID,
   HTTP_RELAY,
-  IS_TESTNET,
   STORAGE_NAMESPACE,
   SHOW_DEVELOPMENT_SIGNUP,
-  TESTNET_HOST,
 } from './config'
 
 const SESSION_KEY = STORAGE_NAMESPACE
@@ -20,8 +20,6 @@ const RING_AUTH_CANCELED_ERROR_NAME = 'RingAuthCanceled'
 const RING_AUTH_EXPIRED_ERROR_NAME = 'RingAuthExpired'
 const CLOSED_SIGNUP_MESSAGE =
   'This homeserver does not allow open signup. Start it with \'signup_mode = "open"\' for creating new identities.'
-
-export const pubky = IS_TESTNET ? Pubky.testnet(TESTNET_HOST) : new Pubky()
 
 export interface RingAuthFlow {
   authorizationUrl: string

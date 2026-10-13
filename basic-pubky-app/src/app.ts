@@ -256,9 +256,10 @@ function statusHtml() {
   if (state.busy) {
     return state.quietBusy ? '' : `<p class="status">${escapeHtml(state.busy)}</p>`
   }
-  if (state.error) return `<p class="status error">${escapeHtml(state.error)}</p>`
-  if (state.notice) return `<p class="status">${statusMessage(state.notice, state.noticePath)}</p>`
-  return ''
+  return `
+    ${state.notice ? `<p class="status">${statusMessage(state.notice, state.noticePath)}</p>` : ''}
+    ${state.error ? `<p class="status error">${escapeHtml(state.error)}</p>` : ''}
+  `
 }
 
 function updateStatus() {
@@ -583,11 +584,10 @@ async function handleSaveFile(form: HTMLFormElement) {
     if (state.revision !== revision) return
     state.editingId = state.editingId ? file.id : undefined
     delete state.drafts[space]
+    state.files = [file, ...state.files.filter((existing) => existing.id !== file.id)]
     setNotice('File saved:', filePath(space, file.id))
-    await refreshFiles()
-    if (state.revision !== revision) return
-    updateFilesList(state.files, space, state.busy, state.uploads)
     updateEditor(state.files, state.editingId, space, state.busy, undefined, state.fileLock)
+    await refreshFileListAfterWrite()
   })
 }
 
@@ -607,10 +607,8 @@ async function handleDeleteFile(id: string) {
       state.editingId = undefined
       delete state.drafts[space]
     }
+    state.files = state.files.filter((file) => file.id !== id)
     setNotice('File deleted:', filePath(space, id))
-    await refreshFiles()
-    if (state.revision !== revision) return
-    updateFilesList(state.files, space, state.busy, state.uploads)
     updateEditor(
       state.files,
       state.editingId,
@@ -619,6 +617,7 @@ async function handleDeleteFile(id: string) {
       state.drafts[space],
       state.fileLock,
     )
+    await refreshFileListAfterWrite()
   })
 }
 
@@ -636,9 +635,9 @@ async function handleUploadFile(form: HTMLFormElement) {
     if (!isCurrent()) return
     const fileInput = form.querySelector<HTMLInputElement>('input[name="file"]')
     if (fileInput) fileInput.value = ''
+    state.uploads = [...state.uploads, { name }]
     setNotice('File uploaded:', uploadedFilePath(space, name))
-    await refreshFiles()
-    if (isCurrent()) updateFilesList(state.files, space, state.busy, state.uploads)
+    await refreshFileListAfterWrite()
   })
 }
 
@@ -659,9 +658,9 @@ async function handleUploadedFileAction(name: string, action: string) {
     } else if (action === 'delete') {
       await deleteUploadedFile(session, space, name)
       if (!isCurrent()) return
+      state.uploads = state.uploads.filter((file) => file.name !== name)
       setNotice('File deleted:', uploadedFilePath(space, name))
-      await refreshFiles()
-      if (isCurrent()) updateFilesList(state.files, space, state.busy, state.uploads)
+      await refreshFileListAfterWrite()
     } else if (action === 'copy' && space === 'public') {
       await copyTextToClipboard(publicUploadedFileAddress(session, name))
       if (isCurrent()) setNotice('Public address copied.')
@@ -821,6 +820,22 @@ async function refreshFiles() {
   if (isCurrent()) {
     state.files = files
     state.uploads = uploads
+  }
+}
+
+/** A completed write stays successful even if refreshing the list fails. */
+async function refreshFileListAfterWrite() {
+  const revision = state.revision
+  updateFilesList(state.files, state.space, state.busy, state.uploads)
+  try {
+    await refreshFiles()
+    if (state.revision === revision) {
+      updateFilesList(state.files, state.space, state.busy, state.uploads)
+    }
+  } catch (error) {
+    if (state.revision === revision) {
+      state.error = `Could not refresh the file list: ${formatError(error)}`
+    }
   }
 }
 

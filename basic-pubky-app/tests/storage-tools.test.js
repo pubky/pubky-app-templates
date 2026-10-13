@@ -29,19 +29,22 @@ after(async () => {
 })
 
 function sessionFor(urls = []) {
-  const calls = { metadata: [], puts: [], gets: [], deletes: [] }
+  const calls = { lists: [], metadata: [], puts: [], gets: [], deletes: [] }
   const session = {
     info: { publicKey: owner, capabilities: ['/pub/template/:rw', '/priv/template/:rw'] },
     storage: {
-      list: async () => urls,
+      list: async (...args) => {
+        calls.lists.push(args)
+        return urls
+      },
       stats: async (path) => {
         calls.metadata.push(path)
         return { contentLength: 3 }
       },
       putBytes: async (path, bytes) => calls.puts.push({ path, bytes }),
-      getBytes: async (path) => {
+      get: async (path) => {
         calls.gets.push(path)
-        return new Uint8Array([0, 128, 255])
+        return new globalThis.Response(new Uint8Array([0, 128, 255]))
       },
       delete: async (path) => calls.deletes.push(path),
     },
@@ -70,9 +73,13 @@ test('uploaded file listings validate owner and app folder before requesting met
   const valid = address('/priv/template/attachments/file.bin')
   const invalid = [
     address('/priv/template/attachments/file.bin', anotherOwner),
+    address('/priv/template/attachments/nested/', anotherOwner),
     address('/pub/template/attachments/file.bin'),
+    address('/pub/template/attachments/nested/'),
     address('/priv/other-app/attachments/file.bin'),
+    address('/priv/template/attachments-other/file.bin'),
     address('/priv/template/attachments/nested/file.bin'),
+    address('/priv/template/attachments/nested/deeper/'),
   ]
   for (const url of invalid) {
     const { session, calls } = sessionFor([valid, url])
@@ -83,6 +90,85 @@ test('uploaded file listings validate owner and app folder before requesting met
   assert.deepEqual(
     (await data.listUploadedFiles(session, 'private')).map((file) => file.name),
     ['file.bin'],
+  )
+})
+
+test('shallow upload listings skip directories and preserve pagination and file deduplication', async () => {
+  const directory = '/priv/template/attachments/'
+  const firstPage = Array.from({ length: 50 }, (_, index) =>
+    address(`${directory}folder-${index}/`),
+  )
+  const secondPage = [
+    address(`${directory}one.bin`),
+    address(`${directory}nested/`),
+    address(`${directory}two.bin`),
+    address(`${directory}one.bin`),
+  ]
+  const { session, calls } = sessionFor()
+  session.storage.list = async (...args) => {
+    calls.lists.push(args)
+    if (calls.lists.length === 1) return firstPage
+    assert.equal(calls.lists.length, 2)
+    return secondPage
+  }
+  const files = await data.listUploadedFiles(session, 'private')
+  assert.deepEqual(
+    files.map((file) => file.name),
+    ['one.bin', 'two.bin'],
+  )
+  assert.deepEqual(calls.lists, [
+    [directory, null, false, 50, true],
+    [directory, firstPage.at(-1), false, 50, true],
+  ])
+  assert.deepEqual(calls.metadata, [`${directory}one.bin`, `${directory}two.bin`])
+})
+
+test('upload listings stop when the server repeats a full page of directories', async () => {
+  const urls = Array.from({ length: 50 }, (_, index) =>
+    address(`/pub/template/attachments/${index}/`),
+  )
+  const { session, calls } = sessionFor(urls)
+  assert.deepEqual(await data.listUploadedFiles(session, 'public'), [])
+  assert.equal(calls.lists.length, 2)
+  assert.deepEqual(calls.metadata, [])
+})
+
+test('only a missing upload directory is treated as an empty listing', async () => {
+  const { session } = sessionFor()
+  for (const statusCode of [404, 401, 403, 500, 503]) {
+    const error = { data: { statusCode } }
+    session.storage.list = async () => {
+      throw error
+    }
+    if (statusCode === 404) {
+      assert.deepEqual(await data.listUploadedFiles(session, 'public'), [])
+    } else {
+      await assert.rejects(data.listUploadedFiles(session, 'public'), (actual) => actual === error)
+    }
+  }
+})
+
+test('upload listing failures and stale views cannot return partial file metadata', async () => {
+  const { session, calls } = sessionFor([address('/priv/template/attachments/one.bin')])
+  let current = true
+  session.storage.list = async () => {
+    current = false
+    return [address('/priv/template/attachments/one.bin')]
+  }
+  await assert.rejects(
+    data.listUploadedFiles(session, 'private', () => current),
+    /view changed/,
+  )
+  assert.deepEqual(calls.metadata, [])
+
+  const failed = sessionFor([address('/priv/template/attachments/one.bin')])
+  const error = new Error('metadata unavailable')
+  failed.session.storage.stats = async () => {
+    throw error
+  }
+  await assert.rejects(
+    data.listUploadedFiles(failed.session, 'private'),
+    (actual) => actual === error,
   )
 })
 
@@ -210,6 +296,193 @@ test('public streaming reads cancel oversized bodies even without a Content-Leng
   )
   await assert.rejects(data.readLimitedResponse(response), /5 MiB/)
   assert.equal(canceled, true)
+})
+
+test('authenticated downloads bound streamed bytes despite missing or stale size metadata', async () => {
+  for (const contentLength of [undefined, 1, data.MAX_FILE_BYTES]) {
+    const { session } = sessionFor()
+    session.storage.stats = async () => ({ contentLength })
+    let canceled = false
+    const response = new globalThis.Response(
+      new globalThis.ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(data.MAX_FILE_BYTES))
+          controller.enqueue(new Uint8Array(1))
+        },
+        cancel() {
+          canceled = true
+        },
+      }),
+      { headers: contentLength === undefined ? {} : { 'Content-Length': String(contentLength) } },
+    )
+    session.storage.get = async () => response
+    await assert.rejects(data.readUploadedFile(session, 'private', 'file.bin'), /5 MiB/)
+    assert.equal(canceled, true)
+    assert.equal(response.body.locked, false)
+  }
+})
+
+test('authenticated downloads reject missing files and invalid advertised sizes before fetching', async () => {
+  for (const metadata of [
+    undefined,
+    { contentLength: data.MAX_FILE_BYTES + 1 },
+    { contentLength: -1 },
+    { contentLength: Infinity },
+    { contentLength: NaN },
+  ]) {
+    const { session, calls } = sessionFor()
+    session.storage.stats = async () => metadata
+    await assert.rejects(
+      data.readUploadedFile(session, 'private', 'file.bin'),
+      metadata ? /5 MiB/ : /no longer exists/,
+    )
+    assert.deepEqual(calls.gets, [])
+  }
+})
+
+test('authenticated downloads preserve empty, binary and exact-limit content with optional metadata', async () => {
+  for (const bytes of [
+    new Uint8Array(),
+    new Uint8Array([0, 128, 255, 13, 10]),
+    new Uint8Array(data.MAX_FILE_BYTES).fill(255),
+  ]) {
+    const { session } = sessionFor()
+    session.storage.stats = async () => ({})
+    const response = new globalThis.Response(
+      new globalThis.ReadableStream({
+        start(controller) {
+          const middle = Math.floor(bytes.length / 2)
+          controller.enqueue(bytes.subarray(0, middle))
+          controller.enqueue(bytes.subarray(middle))
+          controller.close()
+        },
+      }),
+    )
+    session.storage.get = async () => response
+    assert.deepEqual(await data.readUploadedFile(session, 'public', 'file.bin'), bytes)
+    assert.equal(response.body.locked, false)
+  }
+  assert.deepEqual(await data.readLimitedResponse(new globalThis.Response(null)), new Uint8Array())
+})
+
+test('authenticated download failures preserve the original metadata or request error', async () => {
+  for (const method of ['stats', 'get']) {
+    const { session, calls } = sessionFor()
+    const error = new Error(`${method} failed`)
+    session.storage[method] = async () => {
+      throw error
+    }
+    await assert.rejects(
+      data.readUploadedFile(session, 'private', 'file.bin'),
+      (actual) => actual === error,
+    )
+    if (method === 'stats') assert.deepEqual(calls.gets, [])
+  }
+})
+
+test('authenticated downloads stop stale requests after metadata and cancel stale response bodies', async () => {
+  const { session, calls } = sessionFor()
+  let current = true
+  session.storage.stats = async () => {
+    current = false
+    return {}
+  }
+  await assert.rejects(
+    data.readUploadedFile(session, 'private', 'file.bin', () => current),
+    /view changed/,
+  )
+  assert.deepEqual(calls.gets, [])
+
+  current = true
+  let canceled = false
+  session.storage.stats = async () => ({})
+  const response = new globalThis.Response(
+    new globalThis.ReadableStream({
+      cancel() {
+        canceled = true
+      },
+    }),
+  )
+  session.storage.get = async () => {
+    current = false
+    return response
+  }
+  await assert.rejects(
+    data.readUploadedFile(session, 'private', 'file.bin', () => current),
+    /view changed/,
+  )
+  assert.equal(canceled, true)
+  assert.equal(response.body.locked, false)
+  await assert.rejects(
+    data.readLimitedResponse(new globalThis.Response(null), () => false),
+    /view changed/,
+  )
+})
+
+test('stream failures release the reader lock and preserve the original read error', async () => {
+  const error = new Error('connection interrupted')
+  const response = new globalThis.Response(
+    new globalThis.ReadableStream({
+      pull(controller) {
+        controller.error(error)
+      },
+    }),
+  )
+  await assert.rejects(data.readLimitedResponse(response), (actual) => actual === error)
+  assert.equal(response.body.locked, false)
+})
+
+test('a failing stream cancellation does not hide the oversized-download error', async () => {
+  const response = new globalThis.Response(
+    new globalThis.ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(data.MAX_FILE_BYTES + 1))
+      },
+      cancel() {
+        throw new Error('cancellation failed')
+      },
+    }),
+  )
+  await assert.rejects(data.readLimitedResponse(response), /5 MiB/)
+  assert.equal(response.body.locked, false)
+})
+
+test('view changes while a read waits cancel the stream, including when the next read finishes it', async () => {
+  for (const done of [false, true]) {
+    let current = true
+    let release
+    let reading
+    let canceled = false
+    const started = new Promise((resolve) => {
+      reading = resolve
+    })
+    const response = new globalThis.Response(
+      new globalThis.ReadableStream(
+        {
+          async pull(controller) {
+            reading()
+            await new Promise((resolve) => {
+              release = resolve
+            })
+            if (done) controller.close()
+            else controller.enqueue(new Uint8Array([1]))
+          },
+          cancel() {
+            canceled = true
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+    )
+    const read = data.readLimitedResponse(response, () => current)
+    await started
+    current = false
+    release()
+    await assert.rejects(read, /view changed/)
+    // A closed stream needs no cancellation, but must still reject its stale result.
+    assert.equal(canceled, !done)
+    assert.equal(response.body.locked, false)
+  }
 })
 
 test('file UI escapes metadata and handles invalid server dates without crashing', () => {

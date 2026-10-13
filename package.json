@@ -10,10 +10,12 @@
     "format:check": "prettier \"**/*.{js,ts,json,yml,yaml,md,html}\" --check",
     "lint": "npm run lint:code && npm run lint:actions",
     "lint:actions": "github-actionlint .github/workflows/*.yml",
-    "lint:code": "eslint ."
+    "lint:code": "eslint .",
+    "test:browser": "playwright test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.0",
     "eslint": "^10.11.0",
     "github-actionlint": "^1.7.12",
     "globals": "^17.12.0",

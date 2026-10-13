@@ -1,6 +1,6 @@
 import type { Event as PubkyEvent, EventStreamBuilder, Session } from '@synonymdev/pubky'
 import { APP_PATHS, MAX_EVENT_BYTES, type StorageSpace } from './config'
-import { pubky } from './pubky'
+import { pubky } from './client'
 
 export interface AppEvent {
   type: string
