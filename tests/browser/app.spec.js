@@ -189,6 +189,17 @@ for (const kind of ['note', 'upload']) {
   }
 }
 
+test('a completed note deletion stays successful when unlock fails', async ({ page }) => {
+  await openApp(page, { files: { [notePath]: note } })
+  await failNext(page, 'unlock')
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(page.locator('#status')).toContainText('File deleted:')
+  await expect(page.locator('#files-list li')).toHaveCount(0)
+  await expect(submit(page)).toBeEnabled()
+  expect(await calls(page, 'deleteLocked')).toHaveLength(1)
+  expect(await calls(page, 'unlock')).toHaveLength(1)
+})
+
 test('authenticated oversized downloads cancel their stream and restore controls', async ({
   page,
 }) => {

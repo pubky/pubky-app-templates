@@ -379,3 +379,28 @@ test('read failure releases the acquired lock and automatic delete uses a lock',
   assert.deepEqual(valid.calls.deletes, ['/priv/template/files/note.json'])
   assert.equal(valid.calls.unlocks.length, 1)
 })
+
+test('automatic delete keeps its outcome when lock cleanup fails', async () => {
+  for (const deleteFails of [false, true]) {
+    const { session, calls } = fakeSession([], {})
+    const deleteError = new Error('Deletion failed')
+    session.storage.unlock = async (lock) => {
+      calls.unlocks.push(lock.path)
+      throw new Error('Unlock unavailable')
+    }
+    if (deleteFails) {
+      session.storage.deleteLocked = async () => {
+        throw deleteError
+      }
+      await assert.rejects(
+        storage.deleteFile(session, 'private', 'note'),
+        (error) => error === deleteError,
+      )
+    } else {
+      await storage.deleteFile(session, 'private', 'note')
+      assert.deepEqual(calls.deletes, ['/priv/template/files/note.json'])
+    }
+    assert.equal(calls.unlocks.length, 1)
+    assert.equal(calls.freed.length, 1)
+  }
+})

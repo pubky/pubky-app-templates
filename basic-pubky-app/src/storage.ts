@@ -129,7 +129,9 @@ export async function deleteFile(
   try {
     await withLock(session, space, id, lock, (sdkLock) => session.storage.deleteLocked(sdkLock))
   } finally {
-    if (!heldLock) await releaseFileLock(lock)
+    // Cleanup must not turn a committed deletion into a failure or hide its original error.
+    // As with editor cleanup, a failed unlock leaves only a bounded server-side lease.
+    if (!heldLock) await releaseFileLock(lock).catch(() => undefined)
   }
 }
 
