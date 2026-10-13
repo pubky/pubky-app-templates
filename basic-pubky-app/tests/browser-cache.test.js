@@ -14,6 +14,17 @@ function memoryStorage() {
   }
 }
 
+class TestButton {
+  constructor(id) {
+    this.id = id
+    this.dataset = {}
+  }
+
+  closest(selector) {
+    return selector === 'button' ? this : null
+  }
+}
+
 // Model only the editor fields and mount boundaries; exercise the real app handlers.
 function editorRoot() {
   const title = { value: '' }
@@ -23,6 +34,7 @@ function editorRoot() {
     querySelector: (selector) => (selector.includes('title') ? title : body),
   }
   let html = ''
+  const handlers = new Map()
   return {
     title,
     body,
@@ -37,7 +49,9 @@ function editorRoot() {
       title.value = value.match(/<input name="title" value="([^"]*)"/)?.[1] ?? ''
       body.value = value.match(/<textarea name="body" rows="8">([^<]*)<\/textarea>/)?.[1] ?? ''
     },
-    addEventListener() {},
+    addEventListener: (type, handler) => handlers.set(type, handler),
+    click: (id) => handlers.get('click')({ target: new TestButton(id) }),
+    submit: (id) => handlers.get('submit')({ target: new TestButton(id), preventDefault() {} }),
     querySelector(selector) {
       if (selector === '#status') return status
       if (selector === '#file-form') return html.includes('id="file-form"') ? form : null
@@ -55,7 +69,7 @@ async function until(predicate) {
   assert.ok(predicate(), 'App did not finish the expected lifecycle transition')
 }
 
-async function setup(t) {
+async function setup(t, { restoreError } = {}) {
   const local = memoryStorage()
   const events = new globalThis.EventTarget()
   Object.assign(globalThis, {
@@ -63,6 +77,8 @@ async function setup(t) {
     sessionStorage: memoryStorage(),
     window: events,
     document: { querySelector: () => null },
+    Element: TestButton,
+    HTMLFormElement: TestButton,
   })
   const server = await createServer({
     root: fileURLToPath(new URL('..', import.meta.url)),
@@ -89,14 +105,20 @@ async function setup(t) {
     free() {},
   })
   t.mock.method(BrowserSessionStore.prototype, 'save', async (session) => record(session))
-  t.mock.method(BrowserSessionStore.prototype, 'isAvailable', async () => false)
+  const available = t.mock.method(BrowserSessionStore.prototype, 'isAvailable', async () => false)
   t.mock.method(BrowserSessionStore.prototype, 'remove', async () => {})
-  let restore = async (id) => (id === original.id ? original : other)
+  let restore = async (id) => {
+    if (restoreError) throw restoreError
+    return id === original.id ? original : other
+  }
   t.mock.method(BrowserSessionStore.prototype, 'restore', (id) => restore(id))
   await auth.saveSession(original)
   const root = editorRoot()
   app.start(root)
-  await until(() => root.innerHTML.includes('id="file-form"'))
+  await until(() =>
+    restoreError ? Boolean(root.status.innerHTML) : root.innerHTML.includes('id="file-form"'),
+  )
+  await setImmediate()
   root.title.value = 'Unsaved title'
   root.body.value = 'Unsaved body'
   const emit = (type, details = {}) => {
@@ -106,6 +128,7 @@ async function setup(t) {
   }
   return {
     auth,
+    available,
     root,
     original,
     other,
@@ -115,6 +138,88 @@ async function setup(t) {
     show: () => emit('pageshow', { persisted: true }),
   }
 }
+
+test('a failed saved-session restore offers retry without starting replacement authentication', async (t) => {
+  const { auth, available, root, original, setRestore } = await setup(t, {
+    restoreError: new Error('Pending revocation could not reach the homeserver'),
+  })
+  assert.equal(available.mock.callCount(), 0, 'Ring must not start while a saved pointer remains')
+  assert.equal(auth.getSavedSessionId(), original.id)
+  assert.ok(root.innerHTML.includes('id="retry-saved-session"'))
+  assert.ok(!root.innerHTML.includes('id="refresh-ring-signin"'))
+  assert.ok(!root.innerHTML.includes('id="development-signup-form"'))
+  assert.ok(root.status.innerHTML.includes('Pending revocation could not reach the homeserver'))
+
+  root.click('retry-saved-session')
+  await until(() =>
+    root.status.innerHTML.includes('Pending revocation could not reach the homeserver'),
+  )
+  await setImmediate()
+  assert.equal(auth.getSavedSessionId(), original.id, 'Another failed retry retains the pointer')
+  assert.equal(available.mock.callCount(), 0)
+
+  setRestore(async () => original)
+  root.click('retry-saved-session')
+  await until(() => root.innerHTML.includes('id="file-form"'))
+  assert.equal(auth.getSavedSessionId(), original.id)
+  assert.equal(available.mock.callCount(), 0, 'Successful restoration needs no new approval')
+})
+
+test('saved-session recovery permits new sign-in only after the SDK confirms revocation', async (t) => {
+  const { auth, available, root, original, setRestore } = await setup(t, {
+    restoreError: new Error('Sign-out is waiting for connectivity'),
+  })
+  assert.equal(auth.getSavedSessionId(), original.id)
+  assert.equal(available.mock.callCount(), 0)
+  setRestore(async () => {
+    throw Object.assign(new Error('Browser session was signed out.'), { name: 'ClientStateError' })
+  })
+
+  root.click('retry-saved-session')
+  await until(() => root.status.innerHTML.includes('secure browser context'))
+  assert.equal(auth.getSavedSessionId(), null)
+  assert.ok(!root.innerHTML.includes('id="retry-saved-session"'))
+  assert.ok(root.innerHTML.includes('id="refresh-ring-signin"'))
+  assert.equal(available.mock.callCount(), 1)
+})
+
+test('stale Ring and development-signup controls cannot replace a saved session awaiting recovery', async (t) => {
+  const { auth, available, root, original } = await setup(t, {
+    restoreError: new Error('Saved session temporarily unavailable'),
+  })
+  const formData = t.mock.method(globalThis, 'FormData', function () {
+    return { get: () => '' }
+  })
+  const signer = t.mock.method(auth.pubky, 'signer', () => {
+    throw new Error('Must not create another identity')
+  })
+
+  root.click('refresh-ring-signin')
+  root.submit('development-signup-form')
+  await setImmediate()
+
+  assert.equal(available.mock.callCount(), 0)
+  assert.equal(formData.mock.callCount(), 0)
+  assert.equal(signer.mock.callCount(), 0)
+  assert.equal(auth.getSavedSessionId(), original.id)
+  assert.ok(root.innerHTML.includes('id="retry-saved-session"'))
+})
+
+test('Back keeps restoration retry available when the saved session is temporarily unavailable', async (t) => {
+  const { auth, available, root, original, setRestore, hide, show } = await setup(t)
+  hide()
+  setRestore(async () => {
+    throw new Error('Homeserver temporarily unavailable')
+  })
+  show()
+  await until(() => root.status.innerHTML.includes('Homeserver temporarily unavailable'))
+  await setImmediate()
+  assert.equal(auth.getSavedSessionId(), original.id)
+  assert.equal(available.mock.callCount(), 0)
+  assert.ok(root.innerHTML.includes('id="retry-saved-session"'))
+  assert.ok(!root.innerHTML.includes('id="file-form"'))
+  assert.equal(root.body.value, '', 'A failed restore must not reveal the cached editor')
+})
 
 test('Back restores live unsaved note fields only after the same saved session is validated', async (t) => {
   const { root, original, setRestore, hide, show } = await setup(t)

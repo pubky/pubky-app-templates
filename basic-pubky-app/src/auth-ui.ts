@@ -13,7 +13,16 @@ export interface RingSigninState {
 const RING_QR_SIZE = 220
 const AUTHORIZE_LINK_ID = 'authorize-ring'
 
-export function authViewHtml(ringSignin: RingSigninState, busy?: string) {
+export function authViewHtml(ringSignin: RingSigninState, busy?: string, restorePending = false) {
+  if (restorePending) {
+    return `
+      <section class="panel">
+        <h2>Restore saved session</h2>
+        <p>Retry restoring your saved session before signing in again. Retrying also completes a pending sign-out.</p>
+        <button id="retry-saved-session" type="button" ${disabledAttr(Boolean(busy))}>Retry saved session</button>
+      </section>
+    `
+  }
   return `
     <section class="auth-grid ${SHOW_DEVELOPMENT_SIGNUP ? '' : 'ring-only'}">
       ${ringPanelHtml(ringSignin, busy)}

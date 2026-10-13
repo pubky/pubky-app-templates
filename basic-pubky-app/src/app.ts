@@ -182,7 +182,9 @@ async function init(drafts?: typeof suspendedDrafts) {
     }
   })
 
-  if (state.revision === revision && !state.session) await refreshRingSignin(Boolean(state.error))
+  if (state.revision !== revision || state.session) return
+  mount()
+  if (!getSavedSessionId()) await refreshRingSignin(Boolean(state.error))
 }
 
 function mount() {
@@ -200,7 +202,7 @@ function mount() {
         ${session ? signedInHeader(session) : ''}
       </header>
       <div id="status">${statusHtml()}</div>
-      <div id="view">${session ? signedInViewHtml() : authViewHtml(state.ringSignin, state.busy)}</div>
+      <div id="view">${session ? signedInViewHtml() : authViewHtml(state.ringSignin, state.busy, Boolean(getSavedSessionId()))}</div>
       <footer class="app-footer">Built with <a href="https://www.npmjs.com/package/@synonymdev/pubky">Pubky SDK</a> v${pubkySdkVersion}</footer>
     </main>
   `
@@ -255,7 +257,14 @@ function updateStatus() {
 
 function canUseAuthorizationUrl() {
   const { authorizationUrl, expired, loading } = state.ringSignin
-  return !state.busy && Boolean(authorizationUrl) && !loading && !expired
+  return (
+    !state.session &&
+    !getSavedSessionId() &&
+    !state.busy &&
+    Boolean(authorizationUrl) &&
+    !loading &&
+    !expired
+  )
 }
 
 function syncControls() {
@@ -356,6 +365,9 @@ function handleClick(event: MouseEvent) {
   }
 
   switch (button.id) {
+    case 'retry-saved-session':
+      void init()
+      break
     case 'refresh-ring-signin':
       void refreshRingSignin(false, true)
       break
@@ -416,6 +428,7 @@ function handleSubmit(event: SubmitEvent) {
 }
 
 async function refreshRingSignin(preserveError = false, fresh = false) {
+  if (state.session || getSavedSessionId()) return
   const token = Symbol('ring-signin')
   cancelRingSignin()
 
@@ -516,14 +529,15 @@ async function handleCopyAuthorizationUrl() {
 }
 
 async function handleDevelopmentSignup(form: HTMLFormElement) {
+  if (state.session || getSavedSessionId()) return
   const formData = new FormData(form)
   const homeserver = formValue(formData, 'homeserver')
 
   const revision = state.revision
   await run('Creating identity...', async () => {
     const session = await signupDevelopmentUser(homeserver)
-    if (state.revision !== revision) return
-    await saveSession(session, () => state.revision === revision)
+    const isCurrent = () => state.revision === revision && !getSavedSessionId()
+    if (!isCurrent() || !(await saveSession(session, isCurrent))) return
     if (state.revision !== revision) return
     await activateSession(session, 'Identity created and signed in.')
   })
@@ -554,7 +568,8 @@ async function handleSaveFile(form: HTMLFormElement) {
     await releaseEditorLock()
     if (state.revision !== revision) return
     state.editingId = state.editingId ? file.id : undefined
-    delete state.drafts[space]
+    // The editor's baseline must stay tied to its text, even if refresh sees a newer write.
+    state.drafts[space] = state.editingId ? reconcileFileDraft(file).draft : undefined
     state.files = [file, ...state.files.filter((existing) => existing.id !== file.id)]
     setNotice('File saved:', filePath(space, file.id))
     updateEditor(state.files, state.editingId, space, state.busy, undefined, state.fileLock)

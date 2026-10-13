@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
 import { fileURLToPath, URL } from 'node:url'
-import { Keypair } from '@synonymdev/pubky'
+import { Keypair, PubkyResource } from '@synonymdev/pubky'
 import { createServer } from 'vite'
 
 let server
@@ -52,10 +52,11 @@ function sessionFor(urls = []) {
   return { session, calls }
 }
 
-test('public reader canonicalizes public Pubky addresses and rejects private or HTTP URLs', () => {
+test('public reader accepts both public Pubky address forms and rejects private or HTTP URLs', () => {
   const path = '/pub/example/readme.json'
   assert.equal(data.parsePublicAddress(address(path)).address, address(path))
-  assert.equal(data.parsePublicAddress(`${owner.toString()}${path}`).address, address(path))
+  const identifier = `${owner.toString()}${path}`
+  assert.equal(data.parsePublicAddress(identifier).address, identifier)
   for (const value of [
     'https://example.com/file',
     'http://localhost/admin',
@@ -64,9 +65,56 @@ test('public reader canonicalizes public Pubky addresses and rejects private or 
     address('/pub/template/file?secret=1'),
     address('/pub/template/file#fragment'),
     address('/pub/template/../secret'),
+    address('/pub/template/./secret'),
+    address('/pub//template/secret'),
+    address('/pub/template/file\u0000'),
+    address('/pub/template/file\u007f'),
+    address('/pub/template/file name'),
     'pubky-invalid/pub/file',
   ])
     assert.throws(() => data.parsePublicAddress(value), undefined, value)
+})
+
+test('public reads preserve Unicode and literal percent filenames through the real SDK parser', async () => {
+  for (const [filename, encodedFilename] of [
+    ['café.json', 'caf%C3%A9.json'],
+    ['100%.txt', '100%25.txt'],
+    ['caf%C3%A9.json', 'caf%25C3%25A9.json'],
+    ['%2e%2e.txt', '%252e%252e.txt'],
+  ]) {
+    for (const prefix of [`pubky://${owner.z32()}`, owner.toString()]) {
+      const input = `${prefix}/pub/any-app/${filename}`
+      const calls = []
+      const readAddress = (target) => {
+        const resource = PubkyResource.parse(target)
+        try {
+          calls.push({ target, path: resource.path })
+        } finally {
+          resource.free()
+        }
+      }
+      const result = await data.readPublicFile(
+        {
+          stats: async (target) => {
+            readAddress(target)
+            return { contentLength: 2 }
+          },
+          get: async (target) => {
+            readAddress(target)
+            return new globalThis.Response('ok')
+          },
+        },
+        `  ${input}\n`,
+      )
+
+      assert.equal(result.address, input)
+      assert.deepEqual([...result.bytes], [111, 107])
+      assert.deepEqual(calls, [
+        { target: input, path: `/pub/any-app/${encodedFilename}` },
+        { target: input, path: `/pub/any-app/${encodedFilename}` },
+      ])
+    }
+  }
 })
 
 test('uploaded file listings validate owner and app folder before requesting metadata', async () => {

@@ -55,6 +55,8 @@ Pending Ring authorization is saved temporarily in the current tab's session sto
 
 Signing out revokes the session and clears affected tabs, including their private data and subscriptions. If remote sign-out fails, the app retains the saved session and offers a retry; other authenticated actions stay disabled while logout is pending. A previous SDK session is migrated by the SDK when restored. Reload older open tabs after upgrading so every tab uses the same session lifecycle.
 
+If restoring a saved session fails, use **Retry saved session** before signing in again. This also retries a pending sign-out after a reload, keeping its revocation tracked until the SDK confirms completion.
+
 ## Public and Private Storage
 
 Use **Public storage** and **Private storage** to choose where files are stored. Each space has its own file list and editor draft. The editor shows the destination folder for a new file and the full path when editing an existing file.

@@ -125,7 +125,7 @@ export async function deleteFile(
   heldLock?: FileLock,
 ) {
   filePath(space, id)
-  const lock = heldLock || (await acquireFileLock(session, space, id)).lock
+  const lock = heldLock || (await acquireLock(session, space, id))
   try {
     await withLock(session, space, id, lock, (sdkLock) => session.storage.deleteLocked(sdkLock))
   } finally {
@@ -135,7 +135,7 @@ export async function deleteFile(
   }
 }
 
-export async function acquireFileLock(session: Session, space: StorageSpace, id: string) {
+async function acquireLock(session: Session, space: StorageSpace, id: string) {
   const path = filePath(space, id)
   let sdkLock: StorageLock
   try {
@@ -158,9 +158,16 @@ export async function acquireFileLock(session: Session, space: StorageSpace, id:
     },
   })
   locks.set(lock, state)
+  return lock
+}
+
+export async function acquireFileLock(session: Session, space: StorageSpace, id: string) {
+  const lock = await acquireLock(session, space, id)
   try {
     // Read after acquiring: a previously displayed note may already be stale.
-    const file = await withLock(session, space, id, lock, () => readFile(session, path, id))
+    const file = await withLock(session, space, id, lock, () =>
+      readFile(session, filePath(space, id), id),
+    )
     return { file, lock }
   } catch (error) {
     await releaseFileLock(lock).catch(() => undefined)

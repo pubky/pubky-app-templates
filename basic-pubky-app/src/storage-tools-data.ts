@@ -126,7 +126,8 @@ export function parsePublicAddress(input: string): { address: Address; filename:
     throw new Error('The public reader accepts files under /pub/ only.')
   }
   return {
-    address: `pubky://${resource.owner.z32()}${path}` as Address,
+    // The parsed path is already encoded; rebuilding an address would encode it twice.
+    address: value as Address,
     filename: path.split('/').at(-1) || 'download',
   }
 }

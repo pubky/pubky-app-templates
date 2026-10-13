@@ -10,6 +10,8 @@ const state = (globalThis.__pubkyTest = {
   failures: {},
   calls: [],
   pendingLists: [],
+  events: [],
+  subscriptions: [],
   streamCanceled: false,
   streamBytes: 0,
   publicFile: { body: 'A public file', metadata: { contentType: 'text/plain' } },
@@ -17,10 +19,18 @@ const state = (globalThis.__pubkyTest = {
 
 function call(method, path) {
   state.calls.push({ method, path })
-  const failure = state.failures[`${method}:${path}`] || state.failures[method]
+  const persisted = JSON.parse(globalThis.sessionStorage.getItem('test-failures') || '{}')
+  const failure = state.failures[`${method}:${path}`] || state.failures[method] || persisted[method]
   delete state.failures[`${method}:${path}`]
   delete state.failures[method]
-  if (failure) throw new Error(failure)
+  delete persisted[method]
+  globalThis.sessionStorage.setItem('test-failures', JSON.stringify(persisted))
+  if (failure) {
+    const error = new Error(failure.message ?? failure)
+    if (failure.name) error.name = failure.name
+    if (failure.statusCode) error.data = { statusCode: failure.statusCode }
+    throw error
+  }
 }
 
 function response(file) {
@@ -92,6 +102,9 @@ const storage = {
     call('lock', path)
     return { path, timeoutSeconds: 60, free() {} }
   },
+  async refreshLock(lock) {
+    call('refreshLock', lock.path)
+  },
   async unlock(lock) {
     call('unlock', lock.path)
   },
@@ -109,7 +122,9 @@ const session = {
   info: { publicKey, capabilities: ['/pub/template/:rw', '/priv/template/:rw'] },
   storage,
   async signout() {
+    globalThis.sessionStorage.setItem('test-pending-revocation', 'true')
     call('signout')
+    globalThis.sessionStorage.removeItem('test-pending-revocation')
   },
 }
 const record = () => ({
@@ -135,7 +150,19 @@ const client = {
     },
     async restore() {
       call('sessions.restore')
+      if (globalThis.sessionStorage.getItem('test-pending-revocation')) {
+        const recovered = globalThis.sessionStorage.getItem('test-revocation-recovered')
+        if (recovered) globalThis.sessionStorage.removeItem('test-pending-revocation')
+        const error = new Error(
+          recovered ? 'Browser session is no longer valid.' : 'Browser session logout is pending.',
+        )
+        error.name = 'ClientStateError'
+        throw error
+      }
       return session
+    },
+    async remove() {
+      call('sessions.remove')
     },
     async save() {
       call('sessions.save')
@@ -152,6 +179,37 @@ const client = {
   async resumeDelegatedGrantAuthFlow() {
     return authFlow()
   },
+  eventStreamForUser(key, cursor) {
+    const subscription = { cursor, options: {}, canceled: false }
+    const builder = {}
+    for (const option of ['path', 'maxEventBytes', 'session', 'reverse', 'limit', 'live']) {
+      builder[option] = (value = true) => {
+        subscription.options[option] = option === 'session' ? true : value
+        return builder
+      }
+    }
+    builder.subscribe = async () => {
+      call('events.subscribe', subscription.options.path)
+      state.subscriptions.push(subscription)
+      return new globalThis.ReadableStream({
+        start(controller) {
+          subscription.controller = controller
+          if (subscription.options.live) return
+          let events = state.events.filter((event) =>
+            event.path.startsWith(subscription.options.path),
+          )
+          if (subscription.options.reverse) events = events.slice().reverse()
+          for (const event of events.slice(0, subscription.options.limit))
+            controller.enqueue(sdkEvent(event))
+          controller.close()
+        },
+        cancel() {
+          subscription.canceled = true
+        },
+      })
+    }
+    return builder
+  },
   publicStorage: {
     async stats(address) {
       call('public.stats', address)
@@ -162,6 +220,23 @@ const client = {
       return response(state.publicFile)
     },
   },
+}
+
+function sdkEvent(event) {
+  return {
+    cursor: event.cursor,
+    eventType: event.type ?? 'PUT',
+    contentHash: event.contentHash,
+    resource: { path: event.path, owner: { z32: () => publicKey.z32(), free() {} }, free() {} },
+    free() {},
+  }
+}
+
+state.emitEvent = (event) => {
+  for (const subscription of state.subscriptions) {
+    if (subscription.options.live && !subscription.canceled)
+      subscription.controller.enqueue(sdkEvent(event))
+  }
 }
 
 export class Pubky {

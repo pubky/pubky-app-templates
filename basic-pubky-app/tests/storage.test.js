@@ -404,3 +404,61 @@ test('automatic delete keeps its outcome when lock cleanup fails', async () => {
     assert.equal(calls.freed.length, 1)
   }
 })
+
+test('automatic deletion does not depend on JSON contents or metadata reads', async () => {
+  for (const space of ['public', 'private']) {
+    for (const [operation, error] of [
+      ['getJson', new SyntaxError('Malformed note JSON')],
+      ['getJson', Object.assign(new Error('GET unavailable'), { data: { statusCode: 503 } })],
+      ['stats', Object.assign(new Error('HEAD unavailable'), { data: { statusCode: 403 } })],
+    ]) {
+      const { session, calls } = fakeSession([], {})
+      let reads = 0
+      session.storage[operation] = async () => {
+        reads += 1
+        throw error
+      }
+
+      await storage.deleteFile(session, space, 'note')
+
+      const path = `${directories[space]}note.json`
+      assert.equal(reads, 0)
+      assert.deepEqual(calls.reads, [])
+      assert.deepEqual(calls.locks, [path])
+      assert.deepEqual(calls.deletes, [path])
+      assert.deepEqual(calls.unlocks, [path])
+      assert.deepEqual(calls.freed, [path])
+    }
+  }
+})
+
+test('automatic deletion preserves permission and lost-lock failures and releases its lease', async () => {
+  for (const statusCode of [403, 412, 503]) {
+    const { session, calls } = fakeSession([], {})
+    const error = Object.assign(new Error('DELETE failed'), { data: { statusCode } })
+    session.storage.deleteLocked = async () => {
+      throw error
+    }
+
+    await assert.rejects(storage.deleteFile(session, 'private', 'note'), (actual) =>
+      statusCode === 412 ? /The file lock was lost/.test(actual.message) : actual === error,
+    )
+
+    assert.deepEqual(calls.deletes, [])
+    assert.deepEqual(calls.unlocks, ['/priv/template/files/note.json'])
+    assert.deepEqual(calls.freed, ['/priv/template/files/note.json'])
+  }
+})
+
+test('deleting with an editor lock leaves its cleanup to the caller', async () => {
+  const { session, calls } = fakeSession([], {})
+  const { lock } = await storage.acquireFileLock(session, 'private', 'note')
+  await storage.deleteFile(session, 'private', 'note', lock)
+  assert.equal(calls.locks.length, 1)
+  assert.deepEqual(calls.deletes, ['/priv/template/files/note.json'])
+  assert.deepEqual(calls.unlocks, [])
+  assert.deepEqual(calls.freed, [])
+  await storage.releaseFileLock(lock)
+  assert.equal(calls.unlocks.length, 1)
+  assert.equal(calls.freed.length, 1)
+})

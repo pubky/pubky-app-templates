@@ -70,6 +70,48 @@ async function fillNote(page) {
 
 const submit = (page) => page.locator('#file-form button[type="submit"]')
 
+for (const modifyDraft of [false, true]) {
+  test(`reopening a saved note after a concurrent refresh ${modifyDraft ? 'preserves a changed draft and reports a conflict' : 'loads the newer remote version'}`, async ({
+    page,
+  }) => {
+    await openApp(page, { files: { [notePath]: note } })
+    await page.getByRole('button', { name: 'Lock & edit', exact: true }).click()
+    await page.locator('textarea[name="body"]').fill('My saved version')
+    await page.evaluate(() => {
+      globalThis.__pubkyTest.holdLists = true
+    })
+    await submit(page).click()
+    await expect.poll(() => page.evaluate(() => globalThis.__pubkyTest.pendingLists.length)).toBe(2)
+    await page.evaluate((path) => {
+      globalThis.__pubkyTest.files[path].json = {
+        title: 'Remote version',
+        body: 'Other client saved this',
+        updatedAt: '2026-02-01T00:00:00.000Z',
+      }
+      globalThis.__pubkyTest.holdLists = false
+      globalThis.__pubkyTest.pendingLists.forEach((resolve) => resolve())
+    }, notePath)
+    await expect(page.locator('#files-list')).toContainText('Remote version')
+    await expect(page.locator('textarea[name="body"]')).toHaveValue('My saved version')
+    if (modifyDraft) await page.locator('textarea[name="body"]').fill('My next unsaved edit')
+    await page.getByRole('button', { name: 'Lock & edit', exact: true }).click()
+    if (modifyDraft) {
+      await expect(page.locator('#status')).toContainText(
+        'The file changed since you started editing',
+      )
+      await expect(page.locator('textarea[name="body"]')).toHaveValue('My next unsaved edit')
+      await expect(submit(page)).toBeDisabled()
+    } else {
+      await expect(page.locator('textarea[name="body"]')).toHaveValue('Other client saved this')
+      await expect(submit(page)).toBeEnabled()
+    }
+    expect(await calls(page, 'putTextLocked')).toHaveLength(1)
+    expect(
+      await page.evaluate((path) => globalThis.__pubkyTest.files[path].json.body, notePath),
+    ).toBe('Other client saved this')
+  })
+}
+
 test('one saved session restores after reload without account picker controls', async ({
   page,
 }) => {
@@ -105,6 +147,131 @@ test('failed signout retains the session and must be retried before signing in a
   await expect(page.locator('#file-form')).toHaveCount(0)
   expect(await page.evaluate(() => globalThis.localStorage.getItem('template:session'))).toBeNull()
   expect(await calls(page, 'signout')).toHaveLength(2)
+})
+
+test('a transient restore failure after reload offers retry without replacing the saved session', async ({
+  page,
+}) => {
+  await openApp(page)
+  await page.evaluate(() =>
+    globalThis.sessionStorage.setItem(
+      'test-failures',
+      JSON.stringify({ 'sessions.restore': 'Restore temporarily unavailable' }),
+    ),
+  )
+  await page.reload()
+  await expect(page.locator('#retry-saved-session')).toBeEnabled()
+  await expect(page.locator('#status')).toContainText('Restore temporarily unavailable')
+  await expect(page.locator('#authorize-ring, #development-signup-form, #file-form')).toHaveCount(0)
+  expect(await calls(page, 'startGrantAuthFlow')).toHaveLength(0)
+  expect(await page.evaluate(() => globalThis.localStorage.getItem('template:session'))).toBe(
+    'browser-test:template',
+  )
+  await page.locator('#retry-saved-session').click()
+  await expect(page.locator('#file-form')).toBeVisible()
+  expect(await calls(page, 'sessions.restore')).toHaveLength(2)
+  expect(await calls(page, 'sessions.save')).toHaveLength(0)
+  expect(await calls(page, 'startGrantAuthFlow')).toHaveLength(0)
+})
+
+test('pending signout survives reload and must finish revocation before another Ring signin', async ({
+  page,
+}) => {
+  await openApp(page)
+  await failNext(page, 'signout')
+  await page.locator('#sign-out').click()
+  await expect(page.getByRole('button', { name: 'Retry sign out', exact: true })).toBeEnabled()
+  await page.reload()
+  await expect(page.locator('#retry-saved-session')).toBeEnabled()
+  await expect(page.locator('#authorize-ring, #development-signup-form, #file-form')).toHaveCount(0)
+  expect(await calls(page, 'startGrantAuthFlow')).toHaveLength(0)
+  expect(await calls(page, 'sessions.save')).toHaveLength(0)
+  expect(await page.evaluate(() => globalThis.localStorage.getItem('template:session'))).toBe(
+    'browser-test:template',
+  )
+  // A still-pending retry must not abandon revocation either.
+  await page.locator('#retry-saved-session').click()
+  await expect(page.locator('#retry-saved-session')).toBeEnabled()
+  expect(await calls(page, 'sessions.restore')).toHaveLength(2)
+  expect(await calls(page, 'startGrantAuthFlow')).toHaveLength(0)
+  await page.evaluate(() => globalThis.sessionStorage.setItem('test-revocation-recovered', 'true'))
+  await page.locator('#retry-saved-session').click()
+  await expect(page.locator('#authorize-ring')).toBeVisible()
+  expect(await page.evaluate(() => globalThis.localStorage.getItem('template:session'))).toBeNull()
+  expect(await calls(page, 'sessions.remove')).toHaveLength(1)
+  expect(await calls(page, 'startGrantAuthFlow')).toHaveLength(1)
+})
+
+test('an existing note can release, reacquire, renew, and save without losing its draft', async ({
+  page,
+}) => {
+  await openApp(page, { files: { [notePath]: note } })
+  await page.getByRole('button', { name: 'Lock & edit', exact: true }).click()
+  await page.locator('textarea[name="body"]').fill('A draft across lock operations')
+  await page.getByRole('button', { name: 'Release lock', exact: true }).click()
+  await expect(submit(page)).toBeDisabled()
+  await page.getByRole('button', { name: 'Lock & edit', exact: true }).click()
+  await expect(page.locator('textarea[name="body"]')).toHaveValue('A draft across lock operations')
+  await page.getByRole('button', { name: 'Renew lock', exact: true }).click()
+  await expect(page.locator('#status')).toContainText('File lock renewed.')
+  await expect(page.locator('textarea[name="body"]')).toHaveValue('A draft across lock operations')
+  await submit(page).click()
+  await expect(page.locator('#status')).toContainText('File saved:')
+  expect(
+    await page.evaluate((path) => globalThis.__pubkyTest.files[path].json.body, notePath),
+  ).toBe('A draft across lock operations')
+  expect(await calls(page, 'lock')).toHaveLength(2)
+  expect(await calls(page, 'refreshLock')).toHaveLength(1)
+  expect(await calls(page, 'putTextLocked')).toHaveLength(1)
+  expect(await calls(page, 'unlock')).toHaveLength(2)
+})
+
+test('an expired lock cannot save and a concurrent change preserves the draft until explicitly reopened', async ({
+  page,
+}) => {
+  await openApp(page, { files: { [notePath]: note } })
+  await page.getByRole('button', { name: 'Lock & edit', exact: true }).click()
+  await page.locator('textarea[name="body"]').fill('My unsaved work')
+  await page.clock.setFixedTime(await page.evaluate(() => Date.now() + 61_000))
+  await submit(page).click()
+  await expect(page.locator('#status')).toContainText('expired or was released')
+  expect(await calls(page, 'putTextLocked')).toHaveLength(0)
+  await page.evaluate((path) => {
+    globalThis.__pubkyTest.files[path].json = {
+      title: 'Changed remotely',
+      body: 'New remote contents',
+      updatedAt: '2026-02-01T00:00:00.000Z',
+    }
+  }, notePath)
+  await page.getByRole('button', { name: 'Lock & edit', exact: true }).click()
+  await expect(page.locator('#status')).toContainText('The file changed since you started editing')
+  await expect(page.locator('textarea[name="body"]')).toHaveValue('My unsaved work')
+  await expect(submit(page)).toBeDisabled()
+  await page.getByRole('button', { name: 'New', exact: true }).click()
+  await page.getByRole('button', { name: 'Lock & edit', exact: true }).click()
+  await expect(page.locator('textarea[name="body"]')).toHaveValue('New remote contents')
+  await expect(submit(page)).toBeEnabled()
+  expect(await calls(page, 'putTextLocked')).toHaveLength(0)
+})
+
+test('a lost lock during renewal preserves the draft and blocks a stale write', async ({
+  page,
+}) => {
+  await openApp(page, { files: { [notePath]: note } })
+  await page.getByRole('button', { name: 'Lock & edit', exact: true }).click()
+  await page.locator('textarea[name="body"]').fill('Keep this after lock loss')
+  await failNext(page, 'refreshLock', { message: 'Precondition failed', statusCode: 412 })
+  await page.getByRole('button', { name: 'Renew lock', exact: true }).click()
+  await expect(page.locator('#status')).toContainText('The file lock was lost')
+  await expect(page.locator('textarea[name="body"]')).toHaveValue('Keep this after lock loss')
+  await submit(page).click()
+  await expect(page.locator('#status')).toContainText('expired or was released')
+  expect(await calls(page, 'putTextLocked')).toHaveLength(0)
+  await page.getByRole('button', { name: 'Lock & edit', exact: true }).click()
+  await expect(page.locator('textarea[name="body"]')).toHaveValue('Keep this after lock loss')
+  await submit(page).click()
+  await expect(page.locator('#status')).toContainText('File saved:')
+  expect(await calls(page, 'putTextLocked')).toHaveLength(1)
 })
 
 test('signout and the next Ring signin update another tab without an account picker', async ({
@@ -267,6 +434,33 @@ test('a completed note deletion stays successful when unlock fails', async ({ pa
   expect(await calls(page, 'unlock')).toHaveLength(1)
 })
 
+for (const problem of ['malformed JSON', 'getJson', 'stats']) {
+  test(`a displayed note can be deleted despite ${problem}`, async ({ page }) => {
+    await openApp(page, { files: { [notePath]: note } })
+    if (problem === 'malformed JSON') {
+      await page.evaluate((path) => {
+        globalThis.__pubkyTest.files[path].json = 'No longer a note'
+      }, notePath)
+    } else {
+      await failNext(page, `${problem}:${notePath}`)
+    }
+    await page.evaluate(() => {
+      globalThis.__pubkyTest.calls = []
+    })
+    await page.getByRole('button', { name: 'Delete', exact: true }).click()
+    await expect(page.locator('#status')).toContainText('File deleted:')
+    await expect(page.locator('#files-list li')).toHaveCount(0)
+    expect(await calls(page, 'getJson')).toHaveLength(0)
+    expect(await calls(page, 'stats')).toHaveLength(0)
+    expect(
+      (await page.evaluate(() => globalThis.__pubkyTest.calls.map((call) => call.method))).slice(
+        0,
+        3,
+      ),
+    ).toEqual(['lock', 'deleteLocked', 'unlock'])
+  })
+}
+
 test('authenticated oversized downloads cancel their stream and restore controls', async ({
   page,
 }) => {
@@ -330,6 +524,111 @@ test('an oversized public stream is canceled and a later read recovers', async (
   })
   await page.getByRole('button', { name: 'Read public file', exact: true }).click()
   await expect(page.locator('.file-preview')).toHaveText('Recovered')
+})
+
+for (const name of ['café.json', '100%25.txt']) {
+  test(`the public reader preserves the SDK resource address for ${name}`, async ({ page }) => {
+    await page.goto('/public-reader.html')
+    const address = `pubky://${owner}/pub/example/${name}`
+    await page.getByLabel('Pubky file address').fill(address)
+    await page.getByRole('button', { name: 'Read public file', exact: true }).click()
+    await expect(page.locator('.file-preview')).toHaveText('A public file')
+    expect((await calls(page, 'public.stats')).map((call) => call.path)).toEqual([address])
+    expect((await calls(page, 'public.get')).map((call) => call.path)).toEqual([address])
+  })
+}
+
+test('event history, live restart, storage switching, and signout keep the correct subscription', async ({
+  page,
+}) => {
+  await openApp(page)
+  await page.evaluate(() => {
+    globalThis.__pubkyTest.events = [
+      { cursor: '1', path: '/pub/template/files/old.json' },
+      { cursor: '2', path: '/pub/template/files/new.json' },
+      { cursor: 'p1', path: '/priv/template/files/private.json' },
+    ]
+  })
+  await page.getByRole('button', { name: 'Recent history', exact: true }).click()
+  await expect(page.locator('#status')).toContainText('Loaded 2 recent events')
+  await expect(page.locator('#event-list li')).toHaveCount(2)
+  await expect(page.locator('#event-list li').first()).toContainText('new.json')
+  expect(await page.evaluate(() => globalThis.__pubkyTest.subscriptions[0].options)).toEqual({
+    path: '/pub/template/',
+    maxEventBytes: 8192,
+    reverse: true,
+    limit: 12,
+  })
+  await page.getByRole('button', { name: 'Start live', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Stop live', exact: true })).toBeEnabled()
+  expect(await page.evaluate(() => globalThis.__pubkyTest.subscriptions.at(-1).cursor)).toBe('2')
+  await page.evaluate(() =>
+    globalThis.__pubkyTest.emitEvent({ cursor: '3', path: '/pub/template/files/live.json' }),
+  )
+  await expect(page.locator('#event-list li').first()).toContainText('live.json')
+  await page.getByRole('button', { name: 'Stop live', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Start live', exact: true })).toBeEnabled()
+  expect(await page.evaluate(() => globalThis.__pubkyTest.subscriptions.at(-1).canceled)).toBe(true)
+  await page.getByRole('button', { name: 'Start live', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Stop live', exact: true })).toBeEnabled()
+  expect(await page.evaluate(() => globalThis.__pubkyTest.subscriptions.at(-1).cursor)).toBe('3')
+  await page.getByRole('button', { name: 'Private storage', exact: true }).click()
+  await expect(page.locator('#event-list')).toContainText('private.json')
+  await expect(page.locator('#event-list')).not.toContainText('live.json')
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        globalThis.__pubkyTest.subscriptions
+          .filter((sub) => sub.options.live && !sub.canceled)
+          .map((sub) => ({
+            cursor: sub.cursor,
+            path: sub.options.path,
+            session: sub.options.session,
+          })),
+      ),
+    )
+    .toEqual([{ cursor: 'p1', path: '/priv/template/', session: true }])
+  await page.evaluate(() =>
+    globalThis.__pubkyTest.emitEvent({
+      cursor: 'p2',
+      path: '/priv/template/files/private-live.json',
+    }),
+  )
+  await expect(page.locator('#event-list li').first()).toContainText('private-live.json')
+  await page.locator('#sign-out').click()
+  await expect(page.locator('#authorize-ring')).toBeVisible()
+  await expect(page.locator('#event-list')).toHaveCount(0)
+  expect(
+    await page.evaluate(() =>
+      globalThis.__pubkyTest.subscriptions.filter((sub) => sub.options.live && !sub.canceled),
+    ),
+  ).toHaveLength(0)
+})
+
+test('event subscription and invalid event errors restore controls and allow retry', async ({
+  page,
+}) => {
+  await openApp(page)
+  await failNext(page, 'events.subscribe')
+  await page.getByRole('button', { name: 'Recent history', exact: true }).click()
+  await expect(page.locator('#status')).toContainText('Simulated unavailable service')
+  await expect(page.getByRole('button', { name: 'Recent history', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: 'Start live', exact: true }).click()
+  await expect
+    .poll(() => page.evaluate(() => globalThis.__pubkyTest.subscriptions.at(-1)?.options.live))
+    .toBe(true)
+  await page.evaluate(() =>
+    globalThis.__pubkyTest.emitEvent({ cursor: 'bad', path: '/pub/someone-else/file.json' }),
+  )
+  await expect(page.locator('#status')).toContainText('outside the selected folder')
+  await expect(page.getByRole('button', { name: 'Start live', exact: true })).toBeEnabled()
+  await expect(page.locator('#event-list')).not.toContainText('someone-else')
+  expect(await page.evaluate(() => globalThis.__pubkyTest.subscriptions.at(-1).canceled)).toBe(true)
+  await page.getByRole('button', { name: 'Recent history', exact: true }).click()
+  await expect(page.locator('#status')).toContainText('Loaded 0 recent events')
+  await fillNote(page)
+  await submit(page).click()
+  await expect(page.locator('#status')).toContainText('File saved:')
 })
 
 for (const signedIn of [true, false]) {
