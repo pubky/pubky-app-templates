@@ -16,6 +16,9 @@ const test = base.extend({
     const externalRequests = []
     const errors = []
     page.on('pageerror', (error) => errors.push(error.message))
+    page.context().on('page', (otherPage) => {
+      otherPage.on('pageerror', (error) => errors.push(error.message))
+    })
     await page.context().route('**/*', (route) => {
       const url = new URL(route.request().url())
       if (url.origin === 'http://127.0.0.1:4175') return route.continue()
@@ -66,6 +69,70 @@ async function fillNote(page) {
 }
 
 const submit = (page) => page.locator('#file-form button[type="submit"]')
+
+test('one saved session restores after reload without account picker controls', async ({
+  page,
+}) => {
+  await openApp(page)
+  await expect(page.locator('#saved-accounts, #add-account')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toBeEnabled()
+  await page.reload()
+  await expect(page.locator('#file-form')).toBeVisible()
+  await expect(page.locator('#sign-out')).toBeEnabled()
+  await expect(page.locator('#saved-accounts, #add-account')).toHaveCount(0)
+  expect(await calls(page, 'sessions.restore')).toHaveLength(1)
+  expect(await calls(page, 'sessions.list')).toHaveLength(0)
+  expect(
+    await page.evaluate(() => globalThis.localStorage.getItem('template:session:accounts')),
+  ).toBeNull()
+})
+
+test('failed signout retains the session and must be retried before signing in again', async ({
+  page,
+}) => {
+  await openApp(page)
+  await failNext(page, 'signout')
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+  await expect(page.locator('#status')).toContainText('Simulated unavailable service')
+  await expect(page.getByRole('button', { name: 'Retry sign out', exact: true })).toBeEnabled()
+  await expect(page.locator('#authorize-ring, #saved-accounts, #add-account')).toHaveCount(0)
+  await expect(page.locator('#file-form')).toHaveCount(0)
+  expect(await page.evaluate(() => globalThis.localStorage.getItem('template:session'))).toBe(
+    'browser-test:template',
+  )
+  await page.getByRole('button', { name: 'Retry sign out', exact: true }).click()
+  await expect(page.locator('#authorize-ring')).toBeVisible()
+  await expect(page.locator('#file-form')).toHaveCount(0)
+  expect(await page.evaluate(() => globalThis.localStorage.getItem('template:session'))).toBeNull()
+  expect(await calls(page, 'signout')).toHaveLength(2)
+})
+
+test('signout and the next Ring signin update another tab without an account picker', async ({
+  page,
+}) => {
+  await openApp(page)
+  const otherPage = await page.context().newPage()
+  await otherPage.goto('/')
+  await expect(otherPage.locator('#file-form')).toBeVisible()
+  await expect(otherPage.locator('#sign-out')).toBeEnabled()
+  await fillNote(otherPage)
+
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+  await expect(page.locator('#authorize-ring')).toBeVisible()
+  await expect(otherPage.locator('#authorize-ring')).toBeVisible()
+  await expect(otherPage.locator('#file-form')).toHaveCount(0)
+
+  await expect
+    .poll(() => page.evaluate(() => typeof globalThis.__pubkyTest.approveSignIn))
+    .toBe('function')
+  await page.evaluate(() => globalThis.__pubkyTest.approveSignIn())
+  await expect(page.locator('#file-form')).toBeVisible()
+  await expect(otherPage.locator('#file-form')).toBeVisible()
+  await expect(otherPage.getByLabel('Title', { exact: true })).toHaveValue('')
+  await expect(otherPage.locator('#saved-accounts, #add-account')).toHaveCount(0)
+  expect(await calls(page, 'sessions.save')).toHaveLength(1)
+  expect(await calls(otherPage, 'sessions.restore')).toHaveLength(2)
+})
 
 test('shallow attachment directories do not hide either file list', async ({ page }) => {
   await openApp(page, {

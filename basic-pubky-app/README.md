@@ -10,7 +10,7 @@ This template focuses on Pubky’s core building blocks. The included vanilla HT
 
 - Grant-based Pubky Ring sign-in with a QR code, authorization link, and pending authorization that resumes after a reload.
 - A development-only authentication shortcut that removes sign-in friction on a local testnet. It requires `signup_mode = "open"` and is not intended as a pattern for production apps.
-- Session persistence, saved account switching, and sign-out synchronization across tabs via the SDK browser session store.
+- Session persistence and sign-out synchronization across tabs via the SDK browser session store.
 - Public and private file storage under configured paths on the user’s Homeserver, using the same editor and file operations.
 - File editing with WebDAV locks, byte uploads in the same editor section, metadata, downloads, and an anonymous public file reader.
 - Recent event history and live updates that resume from the last received cursor, scoped to the selected public or private folder.
@@ -49,7 +49,7 @@ production builds and expose only Pubky Ring sign-in.
 
 ## Browser Sessions
 
-Use HTTPS or localhost: browser persistence requires a secure context, IndexedDB, and Web Locks. The app saves an approved session before making authenticated requests, allowing the SDK to coordinate its credentials across tabs. Saved accounts and the selected account are scoped to the configured storage namespace. Switching the selected account updates other tabs using that namespace.
+Use HTTPS or localhost: browser persistence requires a secure context, IndexedDB, and Web Locks. The app saves an approved session before making authenticated requests, allowing the SDK to coordinate its credentials across tabs. The app remembers one session per configured storage namespace. To use a different account, sign out and sign in again with Pubky Ring. Session changes update other tabs using that namespace.
 
 Pending Ring authorization is saved temporarily in the current tab's session storage so reloading can resume it. Refreshing the sign-in request abandons the previous request. Completed or abandoned requests are removed from session storage.
 
@@ -72,7 +72,7 @@ The template requests read and write access to both app folders during sign-in. 
 
 ### File Locks
 
-Editing an existing note acquires a WebDAV lock and reads the current file before opening it in the editor. Locks last up to 60 seconds; you can renew or release them explicitly. Save writes with the lock and releases it. Changing files, storage spaces, or accounts also releases the app's held lock. One-off deletion acquires its own lock when necessary.
+Editing an existing note acquires a WebDAV lock and reads the current file before opening it in the editor. Locks last up to 60 seconds; you can renew or release them explicitly. Save writes with the lock and releases it. Changing files or storage spaces, and signing out, also releases the app's held lock. One-off deletion acquires its own lock when necessary.
 
 Locks prevent competing writes while held; they do not merge edits. Contention, expired locks, and unsupported Homeservers are reported instead of silently writing without a lock. If a lock expires, acquire a new lock and reread the file before editing again. If the connection is lost during acquisition, a server-side lock may remain until its timeout. This example requires a Homeserver with WebDAV lock support, available in version 0.15.
 
@@ -92,7 +92,7 @@ Copy a public file's Pubky address to share it. Open **Public file reader** in t
 
 ### Event History
 
-Use **Recent history** for the latest 12 changes, newest first. **Start live** follows new changes; on first use it starts with the most recent event, and restarting resumes after the last received cursor for the selected space. Signing out or switching accounts clears the remembered cursors. The stream is stopped when leaving its storage space or session.
+Use **Recent history** for the latest 12 changes, newest first. **Start live** follows new changes; on first use it starts with the most recent event, and restarting resumes after the last received cursor for the selected space. Signing out clears the remembered cursors. The stream is stopped when leaving its storage space or session.
 
 ## App Settings
 

@@ -89,10 +89,6 @@ async function setup(t) {
     free() {},
   })
   t.mock.method(BrowserSessionStore.prototype, 'save', async (session) => record(session))
-  t.mock.method(BrowserSessionStore.prototype, 'list', async () => [
-    record(original),
-    record(other),
-  ])
   t.mock.method(BrowserSessionStore.prototype, 'isAvailable', async () => false)
   t.mock.method(BrowserSessionStore.prototype, 'remove', async () => {})
   let restore = async (id) => (id === original.id ? original : other)
@@ -135,7 +131,7 @@ test('Back restores live unsaved note fields only after the same saved session i
   assert.equal(root.body.value, 'Unsaved body')
 })
 
-test('Back discards cached text when another saved account was selected while away', async (t) => {
+test('Back discards cached text when a new session was saved while away', async (t) => {
   const { auth, root, other, hide, show } = await setup(t)
   hide()
   await auth.saveSession(other)
@@ -162,7 +158,7 @@ test('Back discards cached text when the saved session was revoked', async (t) =
   assert.equal(root.body.value, '')
 })
 
-test('an account invalidation arriving during Back restoration prevents stale drafts from returning', async (t) => {
+test('a session invalidation arriving during Back restoration prevents stale drafts from returning', async (t) => {
   const { auth, root, original, emit, setRestore, hide, show } = await setup(t)
   hide()
   let resolve

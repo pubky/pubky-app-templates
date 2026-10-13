@@ -51,17 +51,8 @@ function sdkError(name, message = name) {
   return Object.assign(new Error(message), { name })
 }
 
-function record(id = 'account:grant', overrides = {}) {
-  return {
-    id,
-    clientId: 'template',
-    publicKey: 'test-public-key',
-    homeserver: 'test-homeserver',
-    storageMode: 'delegated',
-    grantExpiresAt: 12345,
-    free() {},
-    ...overrides,
-  }
+function record(id = 'account:grant') {
+  return { id, free() {} }
 }
 
 function emitSdk(detail) {
@@ -434,14 +425,41 @@ test('unsupported persistence prevents starting auth and retains existing saved 
   assert.equal(start.mock.callCount(), 0)
 })
 
-test('old browser sessions restore through SDK coordination and are remembered as app accounts', async (t) => {
+test('a saved session restores through SDK coordination without scanning other records', async (t) => {
   local.setItem('template:session', 'old:grant')
+  const list = t.mock.method(BrowserSessionStore.prototype, 'list', async () => {
+    throw new Error('Must not scan other saved sessions')
+  })
   const session = {}
   const restore = t.mock.method(BrowserSessionStore.prototype, 'restore', async () => session)
   assert.equal(await auth.restoreSavedSession(), session)
   assert.equal(restore.mock.calls[0].arguments[0], 'old:grant')
+  assert.equal(auth.getSessionId(session), 'old:grant')
   assert.equal(auth.getSavedSessionId(), 'old:grant')
-  assert.deepEqual(JSON.parse(local.getItem('template:session:accounts')), ['old:grant'])
+  assert.deepEqual(local.entries(), [['template:session', 'old:grant']])
+  assert.equal(list.mock.callCount(), 0)
+})
+
+test('without a saved pointer, SDK sessions are not automatically selected', async (t) => {
+  local.setItem('other:template:session', 'other:grant')
+  const restore = t.mock.method(BrowserSessionStore.prototype, 'restore', async () => ({}))
+  const list = t.mock.method(BrowserSessionStore.prototype, 'list', async () => [record()])
+  assert.equal(await auth.restoreSavedSession(), undefined)
+  assert.equal(auth.getSavedSessionId(), null)
+  assert.equal(restore.mock.callCount(), 0)
+  assert.equal(list.mock.callCount(), 0)
+})
+
+test('saving a session persists only its namespace pointer and retains the actual record ID', async (t) => {
+  const session = {}
+  const saved = record()
+  saved.free = t.mock.fn()
+  const save = t.mock.method(BrowserSessionStore.prototype, 'save', async () => saved)
+  assert.equal(await auth.saveSession(session), true)
+  assert.equal(save.mock.calls[0].arguments[0], session)
+  assert.equal(auth.getSessionId(session), saved.id)
+  assert.deepEqual(local.entries(), [['template:session', saved.id]])
+  assert.equal(saved.free.mock.callCount(), 1)
 })
 
 for (const failure of [
@@ -458,15 +476,12 @@ for (const failure of [
 ]) {
   test(`restore preserves saved credentials after transient/unsupported error: ${failure.message}`, async (t) => {
     local.setItem('template:session', 'saved:grant')
-    const accounts = JSON.stringify(['saved:grant', 'other:grant'])
-    local.setItem('template:session:accounts', accounts)
     t.mock.method(BrowserSessionStore.prototype, 'restore', async () => {
       throw failure
     })
     const remove = t.mock.method(BrowserSessionStore.prototype, 'remove', async () => {})
     await assert.rejects(auth.restoreSavedSession(), (error) => error === failure)
     assert.equal(auth.getSavedSessionId(), 'saved:grant')
-    assert.equal(local.getItem('template:session:accounts'), accounts)
     assert.equal(remove.mock.callCount(), 0)
   })
 }
@@ -507,40 +522,47 @@ test('failed remote signout preserves pending logout credentials until retry suc
   assert.equal(remove.mock.callCount(), 0)
 })
 
-test('account listing and selection exclude records belonging to other namespace or client', async (t) => {
-  local.setItem('template:session', 'own:grant')
-  local.setItem('other:template:session', 'other:grant')
-  local.setItem('template:session:accounts', JSON.stringify(['own:grant', 'alien-client:grant']))
-  t.mock.method(BrowserSessionStore.prototype, 'list', async () => [
-    record('own:grant'),
-    record('other:grant'),
-    record('alien-client:grant', { clientId: 'different-app' }),
-  ])
-  assert.deepEqual(
-    (await auth.listSavedAccounts()).map((account) => account.id),
-    ['own:grant'],
-  )
-  await assert.rejects(auth.selectSavedAccount('other:grant'), /not saved by this app/)
-  const session = {}
-  t.mock.method(BrowserSessionStore.prototype, 'restore', async () => session)
-  assert.equal(await auth.selectSavedAccount('own:grant'), session)
+test('signout revokes its own session and preserves a newer saved pointer', async (t) => {
+  const signedOut = deferred()
+  const session = { signout: t.mock.fn(() => signedOut.promise) }
+  t.mock.method(BrowserSessionStore.prototype, 'save', async () => record('older:grant'))
+  await auth.saveSession(session)
+  const result = auth.signOut(session)
+  local.setItem('template:session', 'newer:grant')
+  signedOut.resolve()
+  await result
+  assert.equal(session.signout.mock.callCount(), 1)
+  assert.equal(auth.getSavedSessionId(), 'newer:grant')
 })
 
-test('SDK invalidation drops only the removed active account; notifications detach cleanly', () => {
+test('an invalid restore finishing late cannot remove a newer saved pointer', async (t) => {
+  local.setItem('template:session', 'older:grant')
+  const restored = deferred()
+  t.mock.method(BrowserSessionStore.prototype, 'restore', () => restored.promise)
+  const remove = t.mock.method(BrowserSessionStore.prototype, 'remove', async () => {})
+  const result = auth.restoreSavedSession()
+  local.setItem('template:session', 'newer:grant')
+  restored.reject(sdkError('ClientStateError', 'Browser session is no longer valid.'))
+  assert.equal(await result, undefined)
+  assert.equal(auth.getSavedSessionId(), 'newer:grant')
+  assert.deepEqual(remove.mock.calls[0].arguments, ['older:grant'])
+})
+
+test('SDK invalidation drops only the saved session; notifications detach cleanly', () => {
   local.setItem('template:session', 'active:grant')
-  local.setItem('template:session:accounts', JSON.stringify(['active:grant', 'other:grant']))
   const changes = []
   const unsubscribe = auth.subscribeSavedSessionChanges((change) => changes.push(change.type))
+  emitSdk(null)
+  emitSdk({ id: null, action: 'removed' })
   emitSdk({ id: 'unrelated:grant', action: 'removed' })
   assert.deepEqual(changes, [])
-  emitSdk({ id: 'other:grant', action: 'removed' })
   assert.equal(auth.getSavedSessionId(), 'active:grant')
   emitSdk({ id: 'active:grant', action: 'removed' })
   assert.equal(auth.getSavedSessionId(), null)
-  assert.deepEqual(changes, ['accounts', 'invalidated'])
+  assert.deepEqual(changes, ['invalidated'])
   unsubscribe()
   emitSdk({ id: null, action: 'cleared' })
-  assert.deepEqual(changes, ['accounts', 'invalidated'])
+  assert.deepEqual(changes, ['invalidated'])
 })
 
 test('origin-wide clear invalidates the active handle; namespace pointer changes synchronize UI', () => {
@@ -552,20 +574,24 @@ test('origin-wide clear invalidates the active handle; namespace pointer changes
   assert.deepEqual(changes, [])
   emitStorage('template:session')
   emitSdk({ id: null, action: 'cleared' })
-  assert.deepEqual(changes, ['selected', 'invalidated'])
+  emitStorage(null)
+  assert.deepEqual(changes, ['selected', 'invalidated', 'selected'])
   assert.equal(auth.getSavedSessionId(), null)
+  emitSdk({ id: null, action: 'cleared' })
+  assert.deepEqual(changes, ['selected', 'invalidated', 'selected'])
   unsubscribe()
 })
 
-test('an account operation completed after invalidation cannot replace the active pointer', async (t) => {
+test('a save completed after invalidation cannot replace the saved pointer', async (t) => {
   local.setItem('template:session', 'other:grant')
-  t.mock.method(BrowserSessionStore.prototype, 'save', async () => record('late:grant'))
-  await auth.saveSession({}, () => false)
+  const saved = record('late:grant')
+  saved.free = t.mock.fn()
+  t.mock.method(BrowserSessionStore.prototype, 'save', async () => saved)
+  const session = {}
+  assert.equal(await auth.saveSession(session, () => false), false)
   assert.equal(auth.getSavedSessionId(), 'other:grant')
-  t.mock.method(BrowserSessionStore.prototype, 'list', async () => [record('late:grant')])
-  t.mock.method(BrowserSessionStore.prototype, 'restore', async () => ({}))
-  assert.ok(await auth.selectSavedAccount('late:grant', () => false))
-  assert.equal(auth.getSavedSessionId(), 'other:grant')
+  assert.equal(auth.getSessionId(session), 'late:grant')
+  assert.equal(saved.free.mock.callCount(), 1)
 })
 
 test('development identity creation is rejected before any SDK call when disabled', async (t) => {

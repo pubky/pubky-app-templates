@@ -121,7 +121,10 @@ const record = () => ({
 const authFlow = () => ({
   authorizationUrl: 'pubkyring://authorize?test=browser-fixture',
   saveDelegated: () => 'browser-test-flow',
-  awaitApproval: () => new Promise(() => {}),
+  awaitApproval: () =>
+    new Promise((resolve) => {
+      state.approveSignIn = () => resolve(session)
+    }),
   free() {},
 })
 const client = {
@@ -133,6 +136,10 @@ const client = {
     async restore() {
       call('sessions.restore')
       return session
+    },
+    async save() {
+      call('sessions.save')
+      return record()
     },
     async isAvailable() {
       return true

@@ -32,13 +32,9 @@ import {
   statusMessage,
 } from './html'
 import {
-  deselectSavedAccount,
   getSavedSessionId,
   getSessionId,
-  listSavedAccounts,
-  selectSavedAccount,
   subscribeSavedSessionChanges,
-  type SavedAccount,
   isRingAuthCanceled,
   isRingAuthExpired,
   restoreSavedSession,
@@ -74,7 +70,6 @@ import {
 
 interface State {
   revision: number
-  accounts: SavedAccount[]
   logoutPending: boolean
   fileLock?: FileLock
   stopEventHistory?: () => Promise<void>
@@ -98,7 +93,6 @@ interface State {
 
 const state: State = {
   revision: 0,
-  accounts: [],
   logoutPending: false,
   eventStreamEvents: [],
   files: [],
@@ -123,17 +117,13 @@ export function start(root: HTMLElement) {
     if (input instanceof HTMLInputElement && input.name === 'write-mode') syncControls()
   })
   subscribeSavedSessionChanges((change) => {
-    // pageshow validates the selected account before unblocking a cached waiter.
+    // pageshow validates the saved session before unblocking a cached waiter.
     if (pageSuspended) return
-    if (change.type === 'accounts') {
-      void refreshSavedAccounts()
-      return
-    }
     resetWorkspace()
     setNotice(
       change.type === 'invalidated'
         ? 'This session was signed out or removed in another tab.'
-        : 'Account selection changed in another tab.',
+        : 'Session changed in another tab.',
     )
     mount()
     void init()
@@ -178,13 +168,12 @@ export function start(root: HTMLElement) {
 async function init(drafts?: typeof suspendedDrafts) {
   const revision = state.revision
   await run('Restoring session...', async () => {
-    await refreshSavedAccounts()
     const session = await restoreSavedSession()
     if (state.revision !== revision) return
     if (session) {
       const sessionId = getSessionId(session)
       if (sessionId !== getSavedSessionId()) return
-      // Cached text belongs to the exact saved session, never a newly selected account.
+      // Cached text belongs to the exact saved session, never a new sign-in.
       await activateSession(
         session,
         'Session restored.',
@@ -211,7 +200,6 @@ function mount() {
         ${session ? signedInHeader(session) : ''}
       </header>
       <div id="status">${statusHtml()}</div>
-      <div id="saved-accounts">${savedAccountsHtml()}</div>
       <div id="view">${session ? signedInViewHtml() : authViewHtml(state.ringSignin, state.busy)}</div>
       <footer class="app-footer">Built with <a href="https://www.npmjs.com/package/@synonymdev/pubky">Pubky SDK</a> v${pubkySdkVersion}</footer>
     </main>
@@ -224,10 +212,7 @@ function mount() {
 function signedInHeader(session: Session) {
   return `
     <div class="user-block">
-      <div class="account-actions">
-        <button id="sign-out" type="button" ${disabledAttr(Boolean(state.busy))}>${state.logoutPending ? 'Retry sign out' : 'Sign out'}</button>
-        <button id="add-account" type="button" ${disabledAttr(Boolean(state.busy))}>Add account</button>
-      </div>
+      <button id="sign-out" type="button" ${disabledAttr(Boolean(state.busy))}>${state.logoutPending ? 'Retry sign out' : 'Sign out'}</button>
       <p class="pubky-id">${escapeHtml(session.info.publicKey.toString())}</p>
     </div>
   `
@@ -283,10 +268,6 @@ function syncControls() {
   )?.value
 
   for (const button of app.querySelectorAll('button')) {
-    if (button.dataset.accountId) {
-      button.disabled = busy || button.dataset.accountId === getSavedSessionId()
-      continue
-    }
     if (button.type === 'submit' && button.closest('#file-form')) {
       button.disabled =
         busy ||
@@ -335,11 +316,7 @@ function handleClick(event: MouseEvent) {
 
   const button = target.closest<HTMLButtonElement>('button')
   if (!button || state.busy) return
-  if (button.dataset.accountId) {
-    void switchAccount(button.dataset.accountId)
-    return
-  }
-  if (state.logoutPending && !['sign-out', 'add-account'].includes(button.id)) return
+  if (state.logoutPending && button.id !== 'sign-out') return
 
   const space = button.dataset.storageSpace
   if (space === 'public' || space === 'private') {
@@ -387,12 +364,6 @@ function handleClick(event: MouseEvent) {
       break
     case 'sign-out':
       void handleSignOut()
-      break
-    case 'add-account':
-      deselectSavedAccount()
-      resetWorkspace()
-      mount()
-      void refreshRingSignin()
       break
     case 'renew-file-lock':
       void renewEditorLock()
@@ -849,9 +820,6 @@ async function activateSession(session: Session, notice: string, drafts?: typeof
   state.uploads = []
   state.editingId = state.drafts[state.space]?.editingId
   state.logoutPending = false
-  const revision = state.revision
-  await refreshSavedAccounts()
-  if (state.revision !== revision || state.session !== session) return
   setNotice(notice)
   await refreshFiles()
 }
@@ -916,27 +884,6 @@ function requireSession() {
   return state.session
 }
 
-function savedAccountsHtml() {
-  if (!state.accounts.length) return ''
-  const selected = getSavedSessionId()
-  if (state.session && state.accounts.length === 1 && state.accounts[0]?.id === selected) return ''
-  return `<nav aria-label="Saved accounts"><p>Saved accounts on this browser:</p>${state.accounts
-    .map(
-      (account) =>
-        `<button type="button" data-account-id="${escapeHtml(account.id)}" ${disabledAttr(account.id === selected || Boolean(state.busy))}>${escapeHtml(account.publicKey)}${account.id === selected ? ' (active)' : ''}</button>`,
-    )
-    .join('')}</nav>`
-}
-
-async function refreshSavedAccounts() {
-  const revision = state.revision
-  const accounts = await listSavedAccounts()
-  if (state.revision !== revision) return
-  state.accounts = accounts
-  const container = app.querySelector('#saved-accounts')
-  if (container) container.innerHTML = savedAccountsHtml()
-}
-
 function resetWorkspace() {
   state.revision += 1
   activeOperation = undefined
@@ -955,20 +902,6 @@ function resetWorkspace() {
   state.space = 'public'
   state.eventStreamEvents = []
   state.eventCursor = undefined
-}
-
-async function switchAccount(id: string) {
-  resetWorkspace()
-  mount()
-  const revision = state.revision
-  await run('Switching account...', async () => {
-    const session = await selectSavedAccount(id, () => state.revision === revision)
-    if (state.revision !== revision) return
-    if (!session)
-      throw new Error('This saved session is no longer valid. Sign in again with Pubky Ring.')
-    await activateSession(session, 'Account selected.')
-  })
-  if (state.revision === revision && !state.session) await refreshRingSignin(Boolean(state.error))
 }
 
 async function releaseEditorLock() {

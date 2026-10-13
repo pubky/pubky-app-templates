@@ -13,7 +13,6 @@ import {
 const SESSION_KEY = STORAGE_NAMESPACE
   ? `${STORAGE_NAMESPACE}:${APP_CLIENT_ID}:session`
   : `${APP_CLIENT_ID}:session`
-const ACCOUNTS_KEY = `${SESSION_KEY}:accounts`
 const PENDING_AUTH_KEY = `${SESSION_KEY}:pending-auth`
 const sessionIds = new WeakMap<Session, string>()
 const RING_AUTH_CANCELED_ERROR_NAME = 'RingAuthCanceled'
@@ -30,16 +29,8 @@ export interface RingAuthFlow {
   suspend: () => void
 }
 
-export interface SavedAccount {
-  id: string
-  publicKey: string
-  homeserver: string
-  storageMode: string
-  grantExpiresAt: number
-}
-
 export interface SavedSessionChange {
-  type: 'invalidated' | 'selected' | 'accounts'
+  type: 'invalidated' | 'selected'
 }
 
 export async function signupDevelopmentUser(homeserver: string) {
@@ -143,7 +134,6 @@ export async function saveSession(
   const stored = await pubky.browserSessionStore.save(session)
   try {
     if (beforeSelect) await beforeSelect()
-    rememberAccount(stored.id)
     const selected = isCurrent()
     if (selected) localStorage.setItem(SESSION_KEY, stored.id)
     sessionIds.set(session, stored.id)
@@ -153,51 +143,13 @@ export async function saveSession(
   }
 }
 
-export async function listSavedAccounts(): Promise<SavedAccount[]> {
-  const ids = savedAccountIds()
-  const records = await pubky.browserSessionStore.list()
-  try {
-    // The SDK's store spans the whole origin. Only show records this namespace
-    // saved, so mainnet/testnet demos hosted on one origin cannot mix accounts.
-    return records
-      .filter((record) => ids.includes(record.id) && record.clientId === APP_CLIENT_ID)
-      .map(({ id, publicKey, homeserver, storageMode, grantExpiresAt }) => ({
-        id,
-        publicKey,
-        homeserver,
-        storageMode,
-        grantExpiresAt,
-      }))
-  } finally {
-    records.forEach((record) => record.free())
-  }
-}
-
 export async function restoreSavedSession() {
   const savedId = getSavedSessionId()
-  return savedId ? restoreAccount(savedId) : undefined
-}
-
-export async function selectSavedAccount(id: string, isCurrent: () => boolean = () => true) {
-  if (!(await listSavedAccounts()).some((account) => account.id === id)) {
-    throw new Error('This account was not saved by this app in this network namespace.')
-  }
-  const session = await restoreAccount(id)
-  if (session && isCurrent()) localStorage.setItem(SESSION_KEY, id)
-  return session
-}
-
-/** Leave the saved account available while adding a different account. */
-export function deselectSavedAccount() {
-  localStorage.removeItem(SESSION_KEY)
-}
-
-async function restoreAccount(savedId: string) {
+  if (!savedId) return undefined
   try {
     // The SDK migrates older browser records and coordinates the bearer itself.
     const session = await pubky.browserSessionStore.restore(savedId)
     sessionIds.set(session, savedId)
-    rememberAccount(savedId)
     return session
   } catch (error) {
     if (isInvalidSavedSessionError(error)) {
@@ -213,7 +165,7 @@ export async function signOut(session: Session) {
   // A failed remote logout must retain the SDK record: it contains the pending
   // revocation marker and blocks authenticated requests until retry succeeds.
   await session.signout()
-  if (savedId) forgetAccountPointer(savedId)
+  if (savedId) forgetSessionPointer(savedId)
 }
 
 export function subscribeSavedSessionChanges(callback: (change: SavedSessionChange) => void) {
@@ -221,20 +173,17 @@ export function subscribeSavedSessionChanges(callback: (change: SavedSessionChan
     const detail: unknown = (event as CustomEvent<unknown>).detail
     if (!isRecord(detail)) return
     const active = getSavedSessionId()
-    if (detail.action === 'removed' && typeof detail.id === 'string') {
-      if (!savedAccountIds().includes(detail.id)) return
-      forgetAccountPointer(detail.id)
-      callback({ type: detail.id === active ? 'invalidated' : 'accounts' })
-    } else if (detail.action === 'cleared' && detail.id === null) {
+    if (detail.action === 'removed' && typeof detail.id === 'string' && detail.id === active) {
+      forgetSessionPointer(detail.id)
+      callback({ type: 'invalidated' })
+    } else if (detail.action === 'cleared' && detail.id === null && active) {
       localStorage.removeItem(SESSION_KEY)
-      localStorage.removeItem(ACCOUNTS_KEY)
-      callback({ type: active ? 'invalidated' : 'accounts' })
+      callback({ type: 'invalidated' })
     }
   }
   const onStorage = (event: StorageEvent) => {
     if (event.storageArea !== localStorage) return
     if (event.key === SESSION_KEY || event.key === null) callback({ type: 'selected' })
-    else if (event.key === ACCOUNTS_KEY) callback({ type: 'accounts' })
   }
   window.addEventListener('pubky-session-changed', onSdkChange)
   window.addEventListener('storage', onStorage)
@@ -244,30 +193,8 @@ export function subscribeSavedSessionChanges(callback: (change: SavedSessionChan
   }
 }
 
-function savedAccountIds(): string[] {
-  let ids: unknown = []
-  try {
-    ids = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) ?? '[]')
-  } catch {
-    /* Ignore a malformed index. */
-  }
-  const active = getSavedSessionId()
-  return [
-    ...new Set([
-      ...(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []),
-      ...(active ? [active] : []),
-    ]),
-  ]
-}
-
-function rememberAccount(id: string) {
-  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify([...new Set([...savedAccountIds(), id])]))
-}
-
-function forgetAccountPointer(id: string) {
-  const remaining = savedAccountIds().filter((candidate) => candidate !== id)
+function forgetSessionPointer(id: string) {
   if (getSavedSessionId() === id) localStorage.removeItem(SESSION_KEY)
-  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(remaining))
 }
 
 export function isRingAuthCanceled(error: unknown) {
@@ -328,7 +255,7 @@ function clearPendingAuth(pending: string) {
 }
 
 async function forgetSavedSession(savedId: string) {
-  forgetAccountPointer(savedId)
+  forgetSessionPointer(savedId)
   try {
     await pubky.browserSessionStore.remove(savedId)
   } catch {
