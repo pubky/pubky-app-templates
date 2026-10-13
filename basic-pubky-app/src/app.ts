@@ -34,6 +34,7 @@ import {
 import {
   deselectSavedAccount,
   getSavedSessionId,
+  getSessionId,
   listSavedAccounts,
   selectSavedAccount,
   subscribeSavedSessionChanges,
@@ -111,6 +112,7 @@ let app: HTMLElement
 let activeOperation: symbol | undefined
 let ringAttempt: RingAuthAttempt | undefined
 let pageSuspended = false
+let suspendedDrafts: { sessionId: string; space: StorageSpace; drafts: State['drafts'] } | undefined
 
 export function start(root: HTMLElement) {
   app = root
@@ -138,6 +140,8 @@ export function start(root: HTMLElement) {
   })
   window.addEventListener('pageshow', (event) => {
     pageSuspended = false
+    const drafts = suspendedDrafts
+    suspendedDrafts = undefined
     if (event.persisted) {
       if (ringAttempt?.isCurrent()) {
         ringAttempt.resume()
@@ -145,11 +149,18 @@ export function start(root: HTMLElement) {
       }
       resetWorkspace()
       mount()
-      void init()
+      void init(drafts)
     }
   })
   window.addEventListener('pagehide', (event) => {
     pageSuspended = true
+    captureDraft()
+    const sessionId =
+      state.session && !state.logoutPending ? getSessionId(state.session) : undefined
+    suspendedDrafts =
+      event.persisted && sessionId
+        ? { sessionId, space: state.space, drafts: { ...state.drafts } }
+        : undefined
     if (event.persisted) {
       ringAttempt?.pause()
     } else {
@@ -164,14 +175,21 @@ export function start(root: HTMLElement) {
   void init()
 }
 
-async function init() {
+async function init(drafts?: typeof suspendedDrafts) {
   const revision = state.revision
   await run('Restoring session...', async () => {
     await refreshSavedAccounts()
     const session = await restoreSavedSession()
     if (state.revision !== revision) return
     if (session) {
-      await activateSession(session, 'Session restored.')
+      const sessionId = getSessionId(session)
+      if (sessionId !== getSavedSessionId()) return
+      // Cached text belongs to the exact saved session, never a newly selected account.
+      await activateSession(
+        session,
+        'Session restored.',
+        drafts?.sessionId === sessionId ? drafts : undefined,
+      )
     }
   })
 
@@ -806,15 +824,15 @@ async function refreshFiles() {
   }
 }
 
-async function activateSession(session: Session, notice: string) {
+async function activateSession(session: Session, notice: string, drafts?: typeof suspendedDrafts) {
   cancelRingSignin()
   state.ringSignin = {}
   state.session = session
-  state.space = 'public'
-  state.drafts = {}
+  state.space = drafts?.space ?? 'public'
+  state.drafts = drafts?.drafts ?? {}
   state.files = []
   state.uploads = []
-  state.editingId = undefined
+  state.editingId = state.drafts[state.space]?.editingId
   state.logoutPending = false
   const revision = state.revision
   await refreshSavedAccounts()

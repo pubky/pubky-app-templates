@@ -132,6 +132,11 @@ export function getSavedSessionId() {
   return localStorage.getItem(SESSION_KEY)
 }
 
+/** The saved record this session actually came from, independent of tab selection. */
+export function getSessionId(session: Session) {
+  return sessionIds.get(session)
+}
+
 export async function saveSession(
   session: Session,
   isCurrent: () => boolean = () => true,
