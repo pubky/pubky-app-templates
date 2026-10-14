@@ -302,6 +302,12 @@ test('failed signout retains the session and must be retried before signing in a
   page,
 }) => {
   await openApp(page)
+  await page.evaluate(() => {
+    globalThis.__observedSessionChanges = []
+    globalThis.addEventListener('pubky-session-changed', (event) =>
+      globalThis.__observedSessionChanges.push(event.detail),
+    )
+  })
   await failNext(page, 'signout')
   await page.getByRole('button', { name: 'Sign out', exact: true }).click()
   await expect(page.locator('#status')).toContainText('Simulated unavailable service')
@@ -311,11 +317,16 @@ test('failed signout retains the session and must be retried before signing in a
   expect(await page.evaluate(() => globalThis.localStorage.getItem('template:session'))).toBe(
     'browser-test:template',
   )
+  expect(await page.evaluate(() => globalThis.__observedSessionChanges)).toEqual([])
   await page.getByRole('button', { name: 'Retry sign out', exact: true }).click()
   await expect(page.locator('#authorize-ring')).toBeVisible()
+  await expect(page.locator('#status')).toHaveText('Signed out.')
   await expect(page.locator('#file-form')).toHaveCount(0)
   expect(await page.evaluate(() => globalThis.localStorage.getItem('template:session'))).toBeNull()
   expect(await calls(page, 'signout')).toHaveLength(2)
+  expect(await page.evaluate(() => globalThis.__observedSessionChanges)).toEqual([
+    { id: 'browser-test:template', action: 'removed' },
+  ])
 })
 
 test('a transient restore failure after reload offers retry without replacing the saved session', async ({
@@ -457,7 +468,9 @@ test('signout and the next Ring signin update another tab without an account pic
 
   await page.getByRole('button', { name: 'Sign out', exact: true }).click()
   await expect(page.locator('#authorize-ring')).toBeVisible()
+  await expect(page.locator('#status')).toHaveText('Signed out.')
   await expect(otherPage.locator('#authorize-ring')).toBeVisible()
+  await expect(otherPage.locator('#status')).toContainText('another tab.')
   await expect(otherPage.locator('#file-form')).toHaveCount(0)
 
   await expect

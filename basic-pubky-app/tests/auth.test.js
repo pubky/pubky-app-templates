@@ -574,23 +574,111 @@ for (const failure of [
   })
 }
 
+test('own SDK removal leaves successful signout completion to its caller', async (t) => {
+  const signedOut = deferred()
+  const session = {
+    signout: () => {
+      emitSdk({ id: 'account:grant', action: 'removed' })
+      return signedOut.promise
+    },
+  }
+  t.mock.method(BrowserSessionStore.prototype, 'save', async () => record())
+  await auth.saveSession(session)
+  const changes = []
+  t.after(auth.subscribeSavedSessionChanges((change) => changes.push(change.type)))
+
+  const result = auth.signOut(session)
+  assert.equal(auth.getSavedSessionId(), 'account:grant', 'Keep the pointer until signout resolves')
+  assert.deepEqual(changes, [], 'The caller must not be reset by its own successful logout')
+  signedOut.resolve()
+  await result
+  assert.equal(auth.getSavedSessionId(), null)
+  assert.deepEqual(changes, [])
+})
+
 test('failed remote signout preserves pending logout credentials until retry succeeds', async (t) => {
   let fail = true
   const session = {
     signout: async () => {
       if (fail) throw new Error('Offline')
+      emitSdk({ id: 'account:grant', action: 'removed' })
     },
   }
   t.mock.method(BrowserSessionStore.prototype, 'save', async () => record())
   const remove = t.mock.method(BrowserSessionStore.prototype, 'remove', async () => {})
   await auth.saveSession(session)
+  const changes = []
+  t.after(auth.subscribeSavedSessionChanges((change) => changes.push(change.type)))
   await assert.rejects(auth.signOut(session), /Offline/)
   assert.equal(auth.getSavedSessionId(), 'account:grant')
   assert.equal(remove.mock.callCount(), 0)
+  assert.deepEqual(changes, [])
   fail = false
   await auth.signOut(session)
   assert.equal(auth.getSavedSessionId(), null)
   assert.equal(remove.mock.callCount(), 0)
+  assert.deepEqual(changes, [])
+})
+
+test('failed local signout does not suppress later external session removal', async (t) => {
+  const session = {
+    signout: async () => {
+      throw new Error('Offline')
+    },
+  }
+  t.mock.method(BrowserSessionStore.prototype, 'save', async () => record())
+  await auth.saveSession(session)
+  const changes = []
+  t.after(auth.subscribeSavedSessionChanges((change) => changes.push(change.type)))
+  await assert.rejects(auth.signOut(session), /Offline/)
+
+  emitSdk({ id: 'account:grant', action: 'removed' })
+  assert.equal(auth.getSavedSessionId(), null)
+  assert.deepEqual(changes, ['invalidated'])
+})
+
+for (const action of ['removed', 'cleared']) {
+  test(`local signout still observes external ${action} of the current session`, async (t) => {
+    const signedOut = deferred()
+    const session = { signout: () => signedOut.promise }
+    t.mock.method(BrowserSessionStore.prototype, 'save', async () => record())
+    await auth.saveSession(session)
+    const changes = []
+    t.after(auth.subscribeSavedSessionChanges((change) => changes.push(change.type)))
+    const result = auth.signOut(session)
+    if (action === 'removed') local.setItem('template:session', 'newer:grant')
+
+    emitSdk({ id: action === 'removed' ? 'newer:grant' : null, action })
+    assert.equal(auth.getSavedSessionId(), null)
+    assert.deepEqual(changes, ['invalidated'])
+    signedOut.resolve()
+    await result
+    assert.deepEqual(changes, ['invalidated'])
+  })
+}
+
+test('overlapping local signouts keep their own removal suppressed until both settle', async (t) => {
+  const first = deferred()
+  const second = deferred()
+  let calls = 0
+  const session = { signout: () => (++calls === 1 ? first.promise : second.promise) }
+  t.mock.method(BrowserSessionStore.prototype, 'save', async () => record())
+  await auth.saveSession(session)
+  const changes = []
+  t.after(auth.subscribeSavedSessionChanges((change) => changes.push(change.type)))
+  const firstResult = auth.signOut(session)
+  const firstRejected = assert.rejects(firstResult, /Offline/)
+  const secondResult = auth.signOut(session)
+  first.reject(new Error('Offline'))
+  await firstRejected
+
+  emitSdk({ id: 'account:grant', action: 'removed' })
+  assert.equal(auth.getSavedSessionId(), 'account:grant')
+  assert.deepEqual(changes, [])
+  second.resolve()
+  await secondResult
+  assert.equal(auth.getSavedSessionId(), null)
+  assert.deepEqual(changes, [])
 })
 
 test('signout revokes its own session and preserves a newer saved pointer', async (t) => {

@@ -16,6 +16,7 @@ const SESSION_KEY = STORAGE_NAMESPACE
 const PENDING_AUTH_KEY = `${SESSION_KEY}:pending-auth`
 const PENDING_REVOCATION_PREFIX = `${SESSION_KEY}:pending-revocation:`
 const sessionIds = new WeakMap<Session, string>()
+const localSignouts = new Map<symbol, string>()
 const RING_AUTH_CANCELED_ERROR_NAME = 'RingAuthCanceled'
 const RING_AUTH_EXPIRED_ERROR_NAME = 'RingAuthExpired'
 const CLOSED_SIGNUP_MESSAGE =
@@ -247,10 +248,16 @@ function pendingRevocationIds() {
 
 export async function signOut(session: Session) {
   const savedId = sessionIds.get(session)
+  const operation = Symbol('signout')
+  if (savedId) localSignouts.set(operation, savedId)
   // A failed remote logout must retain the SDK record: it contains the pending
   // revocation marker and blocks authenticated requests until retry succeeds.
-  await session.signout()
-  if (savedId) forgetSessionPointer(savedId)
+  try {
+    await session.signout()
+    if (savedId) forgetSessionPointer(savedId)
+  } finally {
+    localSignouts.delete(operation)
+  }
 }
 
 export function subscribeSavedSessionChanges(callback: (change: SavedSessionChange) => void) {
@@ -259,6 +266,8 @@ export function subscribeSavedSessionChanges(callback: (change: SavedSessionChan
     if (!isRecord(detail)) return
     const active = getSavedSessionId()
     if (detail.action === 'removed' && typeof detail.id === 'string' && detail.id === active) {
+      // The SDK notifies this tab before signout resolves; its caller owns that transition.
+      if ([...localSignouts.values()].includes(detail.id)) return
       forgetSessionPointer(detail.id)
       callback({ type: 'invalidated' })
     } else if (detail.action === 'cleared' && detail.id === null && active) {

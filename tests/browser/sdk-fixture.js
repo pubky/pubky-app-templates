@@ -164,6 +164,9 @@ function sessionFor(id = accountId) {
       globalThis.localStorage.setItem(pendingLogoutKey(id), 'true')
       call('signout', id)
       removeRecord(id)
+      globalThis.dispatchEvent(
+        new globalThis.CustomEvent('pubky-session-changed', { detail: { id, action: 'removed' } }),
+      )
     },
   }
 }
