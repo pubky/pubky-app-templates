@@ -7,6 +7,8 @@ import { createServer } from 'vite'
 let server
 let storage
 let access
+let filesUi
+let fileDrafts
 const owner = Keypair.random().publicKey
 const otherOwner = Keypair.random().publicKey
 const directories = {
@@ -25,10 +27,85 @@ before(async () => {
   })
   storage = await server.ssrLoadModule('/src/storage.ts')
   access = await server.ssrLoadModule('/src/access.ts')
+  filesUi = await server.ssrLoadModule('/src/files-ui.ts')
+  fileDrafts = await server.ssrLoadModule('/src/file-drafts.ts')
 })
 
 after(async () => {
   await server?.close()
+})
+
+test('reacquiring an unchanged file preserves unsaved text and the original baseline', () => {
+  const file = { id: 'note', title: 'Original', body: 'Original body', updatedAt: '2026-01-01' }
+  const opened = fileDrafts.reconcileFileDraft(file).draft
+  const draft = fileDrafts.captureFileDraft(
+    { editingId: file.id, title: 'Unsaved title', body: 'Unsaved body' },
+    file,
+    opened,
+  )
+  const restored = fileDrafts.reconcileFileDraft({ ...file }, draft)
+  assert.equal(restored.conflict, false)
+  assert.equal(restored.draft.title, 'Unsaved title')
+  assert.equal(restored.draft.body, 'Unsaved body')
+  assert.deepEqual(restored.draft.baseline, file)
+})
+
+test('refreshing a list never replaces a suspended draft baseline', () => {
+  const file = { id: 'note', title: 'Original', body: 'Original body', updatedAt: '2026-01-01' }
+  const opened = fileDrafts.reconcileFileDraft(file).draft
+  const draft = fileDrafts.captureFileDraft(
+    { editingId: file.id, title: file.title, body: 'My unsaved changes' },
+    { ...file, body: 'Another editor changed this', updatedAt: '2026-01-02' },
+    opened,
+  )
+  assert.deepEqual(draft.baseline, file)
+  for (const changed of [
+    { ...file, title: 'Changed title' },
+    { ...file, body: 'Changed body' },
+    { ...file, updatedAt: '2026-01-02' },
+  ]) {
+    const result = fileDrafts.reconcileFileDraft(changed, draft)
+    assert.equal(result.conflict, true)
+    assert.equal(result.draft.body, 'My unsaved changes')
+    assert.deepEqual(result.draft.baseline, file)
+    // Retrying cannot silently rebase an unresolved conflict onto the latest file.
+    assert.equal(fileDrafts.reconcileFileDraft(changed, result.draft).conflict, true)
+  }
+})
+
+test('clean drafts adopt the latest file and drafts for other files do not carry over', () => {
+  const original = { id: 'note', title: 'Original', body: 'Original body', updatedAt: '2026-01-01' }
+  const clean = fileDrafts.reconcileFileDraft(original).draft
+  const latest = { ...original, body: 'Latest body', updatedAt: '2026-01-02' }
+  const refreshed = fileDrafts.reconcileFileDraft(latest, clean)
+  assert.equal(refreshed.conflict, false)
+  assert.equal(refreshed.draft.body, latest.body)
+  assert.deepEqual(refreshed.draft.baseline, latest)
+  const other = fileDrafts.reconcileFileDraft(
+    { ...latest, id: 'other' },
+    { ...clean, body: 'Unsaved body for note' },
+  )
+  assert.equal(other.conflict, false)
+  assert.equal(other.draft.body, latest.body)
+  assert.equal(other.draft.editingId, 'other')
+})
+
+test('the shared file list keeps uploaded JSON out of the note editor', () => {
+  const note = { id: 'note', title: 'A note', body: '', updatedAt: '' }
+  const upload = { name: 'uploaded.json', metadata: { contentLength: 3 } }
+  const publicHtml = filesUi.filesPanelHtml([note], 'public', undefined, [upload])
+  assert.equal((publicHtml.match(/<ul /g) || []).length, 1)
+  assert.ok(publicHtml.includes('data-edit-id="note"'))
+  assert.ok(publicHtml.includes('data-upload-name="uploaded.json"'))
+  assert.ok(!publicHtml.includes('data-edit-id="uploaded.json"'))
+  assert.ok(!publicHtml.includes('data-delete-id="uploaded.json"'))
+  assert.ok(publicHtml.includes('data-upload-action="copy"'))
+
+  const privateHtml = filesUi.filesPanelHtml([], 'private', undefined, [upload])
+  assert.ok(!privateHtml.includes('data-upload-action="copy"'))
+  assert.ok(!privateHtml.includes('class="empty"'))
+  assert.ok(privateHtml.includes('data-upload-action="download"'))
+  assert.ok(privateHtml.includes('data-upload-action="delete"'))
 })
 
 function address(path, publicKey = owner) {
@@ -36,7 +113,7 @@ function address(path, publicKey = owner) {
 }
 
 function fakeSession(urls, record = {}) {
-  const calls = { reads: [], writes: [], deletes: [] }
+  const calls = { reads: [], writes: [], deletes: [], locks: [], unlocks: [], freed: [] }
   const session = {
     info: { publicKey: owner },
     storage: {
@@ -45,12 +122,35 @@ function fakeSession(urls, record = {}) {
         calls.reads.push(path)
         return record
       },
+      stats: async () => ({ contentLength: 42, contentType: 'application/json' }),
       putJson: async (path, data) => {
         calls.writes.push({ path, data })
       },
       delete: async (path) => {
         calls.deletes.push(path)
       },
+      lock: async (path) => {
+        calls.locks.push(path)
+        let freed = false
+        return {
+          get path() {
+            assert.equal(freed, false, 'SDK lock accessed after free')
+            return path
+          },
+          timeoutSeconds: 60,
+          free: () => {
+            assert.equal(freed, false, 'SDK lock freed twice')
+            freed = true
+            calls.freed.push(path)
+          },
+        }
+      },
+      putTextLocked: async (lock, body) => {
+        calls.writes.push({ path: lock.path, data: JSON.parse(body) })
+      },
+      deleteLocked: async (lock) => calls.deletes.push(lock.path),
+      refreshLock: async () => undefined,
+      unlock: async (lock) => calls.unlocks.push(lock.path),
     },
   }
   return { session, calls }
@@ -83,8 +183,10 @@ for (const [space, directory] of Object.entries(directories)) {
     })
     const [file] = await storage.listFiles(session, space)
 
-    await storage.saveFile(session, space, { ...file, title: 'Updated' })
-    await storage.deleteFile(session, space, file.id)
+    const { lock } = await storage.acquireFileLock(session, space, file.id)
+    await storage.saveFile(session, space, { ...file, title: 'Updated' }, lock)
+    await storage.deleteFile(session, space, file.id, lock)
+    await storage.releaseFileLock(lock)
 
     assert.equal(file.id, 'real-note')
     assert.equal(calls.writes[0].path, path)
@@ -137,6 +239,46 @@ for (const [space, directory] of Object.entries(directories)) {
       }
     }
   })
+
+  test(`${space}: failed optional metadata preserves notes and permits locked editing`, async () => {
+    const { session } = fakeSession([address(`${directory}note.json`)], {
+      title: 'Readable note',
+      body: 'Keep this content available',
+    })
+    session.storage.stats = async () => {
+      throw Object.assign(new Error('Metadata unavailable'), { data: { statusCode: 503 } })
+    }
+
+    const [file] = await storage.listFiles(session, space)
+    assert.equal(file.title, 'Readable note')
+    assert.equal(file.body, 'Keep this content available')
+    assert.equal(file.metadata, undefined)
+    assert.equal(file.metadataUnavailable, true)
+
+    const opened = await storage.acquireFileLock(session, space, file.id)
+    assert.equal(opened.file.metadataUnavailable, true)
+    await storage.saveFile(session, space, { ...file, body: 'Updated' }, opened.lock)
+    await storage.releaseFileLock(opened.lock)
+
+    session.storage.stats = async () => undefined
+    const [withoutHeaders] = await storage.listFiles(session, space)
+    assert.equal(withoutHeaders.metadata, undefined)
+    assert.notEqual(withoutHeaders.metadataUnavailable, true)
+
+    session.storage.stats = async () => ({ contentLength: 42 })
+    const [recovered] = await storage.listFiles(session, space)
+    assert.equal(recovered.metadata.contentLength, 42)
+    assert.notEqual(recovered.metadataUnavailable, true)
+
+    const contentError = new Error('Cannot read file contents')
+    session.storage.getJson = async () => {
+      throw contentError
+    }
+    session.storage.stats = async () => {
+      throw new Error('Metadata unavailable')
+    }
+    await assert.rejects(storage.listFiles(session, space), (error) => error === contentError)
+  })
 }
 
 test('storage access respects root, separate actions, and directory boundaries', () => {
@@ -165,4 +307,234 @@ test('storage access respects root, separate actions, and directory boundaries',
       )
     }
   }
+})
+
+test('lock acquisition rereads current contents and keeps the token out of editor state', async () => {
+  const { session, calls } = fakeSession([], { title: 'Current revision', body: 'Fresh text' })
+  const { file, lock } = await storage.acquireFileLock(session, 'public', 'note')
+  assert.equal(file.title, 'Current revision')
+  assert.deepEqual(Object.keys(lock), ['id', 'space', 'expiresAt'])
+  assert.equal(file.metadata.contentLength, 42)
+  assert.deepEqual(calls.locks, ['/pub/template/files/note.json'])
+  await storage.releaseFileLock(lock)
+})
+
+test('editing requires a matching session, folder, filename and live lock', async () => {
+  const { session, calls } = fakeSession([], {})
+  const { lock } = await storage.acquireFileLock(session, 'public', 'note')
+  const input = { id: 'note', title: 'Title', body: 'Body' }
+  await assert.rejects(storage.saveFile(session, 'public', input), /Lock and reopen/)
+  await assert.rejects(storage.saveFile({ ...session }, 'public', input, lock), /does not belong/)
+  await assert.rejects(storage.saveFile(session, 'private', input, lock), /does not belong/)
+  await assert.rejects(
+    storage.saveFile(session, 'public', { ...input, id: 'other' }, lock),
+    /does not belong/,
+  )
+  await storage.releaseFileLock(lock)
+  await assert.rejects(storage.saveFile(session, 'public', input, lock), /expired or was released/)
+  assert.deepEqual(calls.writes, [])
+})
+
+test('a lost lock never falls back to an unlocked write', async () => {
+  const { session, calls } = fakeSession([], {})
+  const { lock } = await storage.acquireFileLock(session, 'public', 'note')
+  let attempts = 0
+  session.storage.putTextLocked = async () => {
+    attempts += 1
+    throw Object.assign(new Error('Stale lock'), { data: { statusCode: 412 } })
+  }
+  const input = { id: 'note', title: 'Title', body: 'Body' }
+  await assert.rejects(storage.saveFile(session, 'public', input, lock), /read its latest contents/)
+  await assert.rejects(storage.saveFile(session, 'public', input, lock), /expired or was released/)
+  assert.equal(attempts, 1)
+  assert.deepEqual(calls.writes, [])
+  await storage.releaseFileLock(lock)
+})
+
+test('released locks reject saves, renewals and deletions before touching freed SDK handles', async () => {
+  const { session, calls } = fakeSession([], {})
+  const { lock } = await storage.acquireFileLock(session, 'public', 'note')
+  await storage.releaseFileLock(lock)
+
+  await assert.rejects(
+    storage.saveFile(session, 'public', { id: 'note', title: 'Title', body: 'Body' }, lock),
+    /expired or was released/,
+  )
+  await assert.rejects(
+    storage.renewFileLock(session, 'public', 'note', lock),
+    /expired or was released/,
+  )
+  await assert.rejects(
+    storage.deleteFile(session, 'public', 'note', lock),
+    /expired or was released/,
+  )
+  await storage.releaseFileLock(lock)
+  assert.deepEqual(calls.writes, [])
+  assert.deepEqual(calls.deletes, [])
+  assert.equal(calls.unlocks.length, 1)
+  assert.equal(calls.freed.length, 1)
+})
+
+test('renew uses the granted lifetime and expired locks must be reacquired', async () => {
+  const { session, calls } = fakeSession([], {})
+  const actualNow = Date.now
+  let now = 100000
+  Date.now = () => now
+  try {
+    const { lock } = await storage.acquireFileLock(session, 'private', 'note')
+    assert.equal(lock.expiresAt, 160000)
+    session.storage.refreshLock = async (sdkLock) => {
+      sdkLock.timeoutSeconds = 20
+    }
+    now += 10000
+    await storage.renewFileLock(session, 'private', 'note', lock)
+    assert.equal(lock.expiresAt, 130000)
+    now = 130001
+    await assert.rejects(
+      storage.renewFileLock(session, 'private', 'note', lock),
+      /expired or was released/,
+    )
+    assert.deepEqual(calls.writes, [])
+    await storage.releaseFileLock(lock)
+  } finally {
+    Date.now = actualNow
+  }
+})
+
+test('contention and unavailable lock support do not use unlocked operations', async () => {
+  for (const [statusCode, message] of [
+    [423, /Another editor/],
+    [405, /does not support file locks/],
+  ]) {
+    const { session, calls } = fakeSession([], {})
+    session.storage.lock = async () => {
+      throw Object.assign(new Error('Server refused lock'), { data: { statusCode } })
+    }
+    await assert.rejects(storage.acquireFileLock(session, 'public', 'note'), message)
+    await assert.rejects(storage.deleteFile(session, 'public', 'note'), message)
+    assert.deepEqual(calls.reads, [])
+    assert.deepEqual(calls.writes, [])
+    assert.deepEqual(calls.deletes, [])
+  }
+})
+
+test('lock cleanup waits for an in-flight write and rejects further writes', async () => {
+  const { session, calls } = fakeSession([], {})
+  const { lock } = await storage.acquireFileLock(session, 'public', 'note')
+  let finish
+  session.storage.putTextLocked = () =>
+    new Promise((resolve) => {
+      finish = resolve
+    })
+  const input = { id: 'note', title: 'Title', body: 'Body' }
+  const saving = storage.saveFile(session, 'public', input, lock)
+  await Promise.resolve()
+  const releasing = storage.releaseFileLock(lock)
+  assert.deepEqual(calls.unlocks, [])
+  assert.deepEqual(calls.freed, [])
+  await assert.rejects(storage.saveFile(session, 'public', input, lock), /expired or was released/)
+  finish()
+  await Promise.all([saving, releasing])
+  assert.equal(calls.unlocks.length, 1)
+  assert.equal(calls.freed.length, 1)
+  await storage.releaseFileLock(lock)
+  assert.equal(calls.unlocks.length, 1)
+})
+
+test('read failure releases the acquired lock and automatic delete uses a lock', async () => {
+  const failed = fakeSession([], {})
+  failed.session.storage.getJson = async () => {
+    throw new Error('Cannot read')
+  }
+  await assert.rejects(storage.acquireFileLock(failed.session, 'public', 'note'), /Cannot read/)
+  assert.equal(failed.calls.unlocks.length, 1)
+  assert.equal(failed.calls.freed.length, 1)
+  const valid = fakeSession([], {})
+  await storage.deleteFile(valid.session, 'private', 'note')
+  assert.deepEqual(valid.calls.locks, ['/priv/template/files/note.json'])
+  assert.deepEqual(valid.calls.deletes, ['/priv/template/files/note.json'])
+  assert.equal(valid.calls.unlocks.length, 1)
+})
+
+test('automatic delete keeps its outcome when lock cleanup fails', async () => {
+  for (const deleteFails of [false, true]) {
+    const { session, calls } = fakeSession([], {})
+    const deleteError = new Error('Deletion failed')
+    session.storage.unlock = async (lock) => {
+      calls.unlocks.push(lock.path)
+      throw new Error('Unlock unavailable')
+    }
+    if (deleteFails) {
+      session.storage.deleteLocked = async () => {
+        throw deleteError
+      }
+      await assert.rejects(
+        storage.deleteFile(session, 'private', 'note'),
+        (error) => error === deleteError,
+      )
+    } else {
+      await storage.deleteFile(session, 'private', 'note')
+      assert.deepEqual(calls.deletes, ['/priv/template/files/note.json'])
+    }
+    assert.equal(calls.unlocks.length, 1)
+    assert.equal(calls.freed.length, 1)
+  }
+})
+
+test('automatic deletion does not depend on JSON contents or metadata reads', async () => {
+  for (const space of ['public', 'private']) {
+    for (const [operation, error] of [
+      ['getJson', new SyntaxError('Malformed note JSON')],
+      ['getJson', Object.assign(new Error('GET unavailable'), { data: { statusCode: 503 } })],
+      ['stats', Object.assign(new Error('HEAD unavailable'), { data: { statusCode: 403 } })],
+    ]) {
+      const { session, calls } = fakeSession([], {})
+      let reads = 0
+      session.storage[operation] = async () => {
+        reads += 1
+        throw error
+      }
+
+      await storage.deleteFile(session, space, 'note')
+
+      const path = `${directories[space]}note.json`
+      assert.equal(reads, 0)
+      assert.deepEqual(calls.reads, [])
+      assert.deepEqual(calls.locks, [path])
+      assert.deepEqual(calls.deletes, [path])
+      assert.deepEqual(calls.unlocks, [path])
+      assert.deepEqual(calls.freed, [path])
+    }
+  }
+})
+
+test('automatic deletion preserves permission and lost-lock failures and releases its lease', async () => {
+  for (const statusCode of [403, 412, 503]) {
+    const { session, calls } = fakeSession([], {})
+    const error = Object.assign(new Error('DELETE failed'), { data: { statusCode } })
+    session.storage.deleteLocked = async () => {
+      throw error
+    }
+
+    await assert.rejects(storage.deleteFile(session, 'private', 'note'), (actual) =>
+      statusCode === 412 ? /The file lock was lost/.test(actual.message) : actual === error,
+    )
+
+    assert.deepEqual(calls.deletes, [])
+    assert.deepEqual(calls.unlocks, ['/priv/template/files/note.json'])
+    assert.deepEqual(calls.freed, ['/priv/template/files/note.json'])
+  }
+})
+
+test('deleting with an editor lock leaves its cleanup to the caller', async () => {
+  const { session, calls } = fakeSession([], {})
+  const { lock } = await storage.acquireFileLock(session, 'private', 'note')
+  await storage.deleteFile(session, 'private', 'note', lock)
+  assert.equal(calls.locks.length, 1)
+  assert.deepEqual(calls.deletes, ['/priv/template/files/note.json'])
+  assert.deepEqual(calls.unlocks, [])
+  assert.deepEqual(calls.freed, [])
+  await storage.releaseFileLock(lock)
+  assert.equal(calls.unlocks.length, 1)
+  assert.equal(calls.freed.length, 1)
 })
