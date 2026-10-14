@@ -12,17 +12,23 @@ const upload = { bytes: [0, 128, 255], metadata: { contentLength: 3 } }
 
 async function openApp(
   page,
-  { signedIn = true, files = {}, directories = [], failures = {} } = {},
+  { signedIn = true, files = {}, directories = [], failures = {}, persistentFailures = {} } = {},
 ) {
   await page.addInitScript(
-    ({ signedIn, files, directories, failures }) => {
-      globalThis.__pubkySeed = { files, directories, failures }
+    ({ signedIn, files, directories, failures, persistentFailures }) => {
+      globalThis.__pubkySeed = { files, directories, failures, persistentFailures }
       if (!globalThis.sessionStorage.getItem('test-initialized')) {
         globalThis.sessionStorage.setItem('test-initialized', 'true')
-        if (signedIn) globalThis.localStorage.setItem('template:session', 'browser-test:template')
+        if (signedIn) {
+          globalThis.localStorage.setItem('template:session', 'browser-test:template')
+          globalThis.localStorage.setItem(
+            'test-sdk-records',
+            JSON.stringify(['browser-test:template']),
+          )
+        }
       }
     },
-    { signedIn, files, directories, failures },
+    { signedIn, files, directories, failures, persistentFailures },
   )
   await page.goto('/')
   await expect(page.locator(signedIn ? '#file-form' : '#authorize-ring')).toBeVisible()
@@ -74,6 +80,28 @@ for (const kind of ['note', 'upload']) {
     await expect(page.locator('#files-list')).not.toContainText('Metadata unavailable.')
   })
 }
+
+test('a persistent metadata failure still downloads the exact uploaded bytes', async ({ page }) => {
+  await openApp(page, {
+    files: { [uploadPath]: upload },
+    persistentFailures: { [`stats:${uploadPath}`]: 'Metadata unavailable' },
+  })
+  const uploadRow = page.locator('#files-list li').filter({ hasText: 'example.bin' })
+  await expect(uploadRow).toContainText('Metadata unavailable.')
+  const completed = page.waitForEvent('download')
+  await uploadRow.getByRole('button', { name: 'Download', exact: true }).click()
+  const download = await completed
+  expect(download.suggestedFilename()).toBe('example.bin')
+  const stream = await download.createReadStream()
+  const chunks = []
+  for await (const chunk of stream) chunks.push(chunk)
+  expect([...Buffer.concat(chunks)]).toEqual(upload.bytes)
+  expect(await calls(page, 'get')).toEqual([{ method: 'get', path: uploadPath }])
+  expect(await calls(page, 'stats')).toEqual([
+    { method: 'stats', path: uploadPath },
+    { method: 'stats', path: uploadPath },
+  ])
+})
 
 for (const modifyDraft of [false, true]) {
   test(`reopening a saved note after a concurrent refresh ${modifyDraft ? 'preserves a changed draft and reports a conflict' : 'loads the newer remote version'}`, async ({
@@ -134,6 +162,74 @@ test('one saved session restores after reload without account picker controls', 
   ).toBeNull()
 })
 
+test('failed approval validation and revocation can recover on the current page', async ({
+  page,
+}) => {
+  await openApp(page, { signedIn: false })
+  await failNext(page, 'sessions.restore', 'Approval validation unavailable')
+  await failNext(page, 'signout', 'Revocation temporarily unavailable')
+  await page.evaluate(() => globalThis.__pubkyTest.approveSignIn('failed-approval'))
+  await expect(page.locator('#status')).toContainText('Revocation temporarily unavailable')
+  await expect(page.locator('#retry-saved-session')).toBeEnabled()
+  await expect(page.locator('#authorize-ring, #file-form')).toHaveCount(0)
+  expect(await calls(page, 'startGrantAuthFlow')).toHaveLength(1)
+  await page.evaluate(() =>
+    globalThis.localStorage.setItem('test-sdk-recovered-logout:failed-approval', 'true'),
+  )
+  await page.locator('#retry-saved-session').click()
+  await expect(page.locator('#authorize-ring')).toBeVisible()
+  await expect(page.locator('#refresh-ring-signin')).toBeEnabled()
+  expect(await calls(page, 'startGrantAuthFlow')).toHaveLength(2)
+  expect(await page.evaluate(() => globalThis.localStorage.getItem('template:session'))).toBeNull()
+  expect(
+    await page.evaluate(() => JSON.parse(globalThis.localStorage.getItem('test-sdk-records'))),
+  ).toEqual([])
+})
+
+for (const recordWasSaved of [false, true]) {
+  test(`${recordWasSaved ? 'a deleted' : 'a missing'} SDK record cannot restore a selected session`, async ({
+    page,
+  }) => {
+    await openApp(page, { signedIn: recordWasSaved })
+    await page.evaluate(() => {
+      globalThis.localStorage.setItem('template:session', 'browser-test:template')
+      globalThis.localStorage.setItem('test-sdk-records', '[]')
+    })
+    await page.reload()
+    await expect(page.locator('#authorize-ring')).toBeVisible()
+    await expect(page.locator('#file-form, #retry-saved-session')).toHaveCount(0)
+    expect(await calls(page, 'sessions.restore')).toEqual([
+      { method: 'sessions.restore', path: 'browser-test:template' },
+    ])
+    expect(
+      await page.evaluate(() => globalThis.localStorage.getItem('template:session')),
+    ).toBeNull()
+  })
+}
+
+test('another tab must finish a pending SDK revocation before restoring its record', async ({
+  page,
+}) => {
+  await openApp(page)
+  await failNext(page, 'signout', 'Revocation temporarily unavailable')
+  await page.locator('#sign-out').click()
+  await expect(page.getByRole('button', { name: 'Retry sign out', exact: true })).toBeEnabled()
+  const otherPage = await page.context().newPage()
+  await otherPage.goto('/')
+  await expect(otherPage.locator('#retry-saved-session')).toBeEnabled()
+  await expect(otherPage.locator('#authorize-ring, #file-form')).toHaveCount(0)
+  expect(await calls(otherPage, 'startGrantAuthFlow')).toHaveLength(0)
+  await otherPage.evaluate(() =>
+    globalThis.localStorage.setItem('test-sdk-recovered-logout:browser-test:template', 'true'),
+  )
+  await otherPage.locator('#retry-saved-session').click()
+  await expect(otherPage.locator('#authorize-ring')).toBeVisible()
+  await expect(page.locator('#authorize-ring')).toBeVisible()
+  expect(
+    await page.evaluate(() => JSON.parse(globalThis.localStorage.getItem('test-sdk-records'))),
+  ).toEqual([])
+})
+
 for (const failCleanup of [false, true]) {
   test(`a superseded grant ${failCleanup ? 'keeps failed revocation durable across reload' : "is revoked without replacing another tab's selected grant"}`, async ({
     page,
@@ -181,7 +277,7 @@ for (const failCleanup of [false, true]) {
         'selected-grant',
       )
       await page.evaluate(() =>
-        globalThis.sessionStorage.setItem('test-revocation-recovered', 'true'),
+        globalThis.localStorage.setItem('test-sdk-recovered-logout:stale-grant', 'true'),
       )
       await page.locator('#retry-saved-session').click()
     }
@@ -267,7 +363,9 @@ test('pending signout survives reload and must finish revocation before another 
   await expect(page.locator('#retry-saved-session')).toBeEnabled()
   expect(await calls(page, 'sessions.restore')).toHaveLength(2)
   expect(await calls(page, 'startGrantAuthFlow')).toHaveLength(0)
-  await page.evaluate(() => globalThis.sessionStorage.setItem('test-revocation-recovered', 'true'))
+  await page.evaluate(() =>
+    globalThis.localStorage.setItem('test-sdk-recovered-logout:browser-test:template', 'true'),
+  )
   await page.locator('#retry-saved-session').click()
   await expect(page.locator('#authorize-ring')).toBeVisible()
   expect(await page.evaluate(() => globalThis.localStorage.getItem('template:session'))).toBeNull()

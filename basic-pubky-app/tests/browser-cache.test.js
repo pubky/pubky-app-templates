@@ -54,6 +54,8 @@ function editorRoot() {
     set innerHTML(value) {
       html = value
       this.mounts += 1
+      status.innerHTML =
+        value.match(/<div id="status">([\s\S]*?)<\/div>\s*<div id="view">/)?.[1] ?? ''
       title.value = value.match(/<input name="title" value="([^"]*)"/)?.[1] ?? ''
       body.value = value.match(/<textarea name="body" rows="8">([^<]*)<\/textarea>/)?.[1] ?? ''
     },
@@ -140,7 +142,9 @@ async function setup(t, { restoreError, cleanupError, selected = true } = {}) {
   await until(() =>
     restoreError || cleanupError
       ? Boolean(root.status.innerHTML)
-      : root.innerHTML.includes('id="file-form"'),
+      : selected
+        ? root.innerHTML.includes('id="file-form"')
+        : root.status.innerHTML.includes('secure browser context'),
   )
   await setImmediate()
   root.title.value = 'Unsaved title'
@@ -162,6 +166,55 @@ async function setup(t, { restoreError, cleanupError, selected = true } = {}) {
     show: () => emit('pageshow', { persisted: true }),
   }
 }
+
+test('a failed approval cleanup offers recovery immediately and completes retry without reloading', async (t) => {
+  const { auth, root, original, available, setRestore } = await setup(t, { selected: false })
+  available.mock.mockImplementation(async () => true)
+  const approvals = []
+  const flow = t.mock.method(auth.pubky, 'startGrantAuthFlow', async () => ({
+    authorizationUrl: 'pubkyring://authorize',
+    saveDelegated: () => 'pending-flow',
+    awaitApproval: () => new Promise((resolve) => approvals.push(resolve)),
+    free() {},
+  }))
+  const signout = t.mock.fn(async () => {
+    throw new Error('Approval cleanup is offline')
+  })
+  original.signout = signout
+  setRestore(async () => {
+    throw new Error('Approval validation is offline')
+  })
+
+  root.click('refresh-ring-signin')
+  await until(() => approvals.length === 1)
+  approvals[0](original)
+  await until(() => root.status.innerHTML.includes('Approval cleanup is offline'))
+
+  assert.equal(auth.getSavedSessionId(), null)
+  assert.equal(auth.hasPendingSessionCleanup(), true)
+  assert.equal(signout.mock.callCount(), 1)
+  assert.ok(root.innerHTML.includes('id="retry-saved-session"'))
+  assert.ok(!root.innerHTML.includes('id="refresh-ring-signin"'))
+  assert.ok(!root.innerHTML.includes('id="development-signup-form"'))
+
+  root.click('retry-saved-session')
+  await until(() => root.status.innerHTML.includes('Approval validation is offline'))
+  await setImmediate()
+  assert.equal(auth.hasPendingSessionCleanup(), true)
+  assert.ok(root.innerHTML.includes('id="retry-saved-session"'))
+  assert.equal(flow.mock.callCount(), 1, 'A failed retry must not start new authentication')
+
+  setRestore(async () => original)
+  signout.mock.mockImplementation(async () => {})
+  root.click('retry-saved-session')
+  await until(() => approvals.length === 2)
+  assert.equal(signout.mock.callCount(), 2)
+  assert.equal(auth.hasPendingSessionCleanup(), false)
+  assert.equal(auth.getSavedSessionId(), null)
+  assert.ok(!root.innerHTML.includes('id="retry-saved-session"'))
+  assert.ok(root.innerHTML.includes('id="refresh-ring-signin"'))
+  assert.ok(!root.innerHTML.includes('id="file-form"'))
+})
 
 for (const selected of [false, true]) {
   test(`abandoned-grant cleanup can be retried ${selected ? 'without replacing the selected session' : 'without starting a replacement sign-in'}`, async (t) => {
@@ -257,6 +310,7 @@ for (const historyFails of [false, true]) {
     })
     await until(() => root.eventList.innerHTML.includes('live.json'))
 
+    const mounts = root.mounts
     root.click('load-event-history')
     await until(() => finishHistory)
     assert.equal(liveCanceled, true)
@@ -271,6 +325,9 @@ for (const historyFails of [false, true]) {
     )
     assert.equal(root.eventToggle.textContent, 'Start live')
     assert.ok(root.eventList.innerHTML.includes('No events yet.'))
+    assert.equal(root.mounts, mounts, 'Same-session operations must preserve the current view')
+    assert.equal(root.title.value, 'Unsaved title')
+    assert.equal(root.body.value, 'Unsaved body')
   })
 }
 

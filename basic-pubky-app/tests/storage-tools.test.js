@@ -373,9 +373,12 @@ test('public streaming reads cancel oversized bodies even without a Content-Leng
 })
 
 test('authenticated downloads bound streamed bytes despite missing or stale size metadata', async () => {
-  for (const contentLength of [undefined, 1, data.MAX_FILE_BYTES]) {
+  for (const contentLength of [undefined, 1, data.MAX_FILE_BYTES, 'unavailable']) {
     const { session } = sessionFor()
-    session.storage.stats = async () => ({ contentLength })
+    session.storage.stats = async () => {
+      if (contentLength === 'unavailable') throw new Error('HEAD unavailable')
+      return { contentLength }
+    }
     let canceled = false
     const response = new globalThis.Response(
       new globalThis.ReadableStream({
@@ -439,19 +442,64 @@ test('authenticated downloads preserve empty, binary and exact-limit content wit
   assert.deepEqual(await data.readLimitedResponse(new globalThis.Response(null)), new Uint8Array())
 })
 
-test('authenticated download failures preserve the original metadata or request error', async () => {
-  for (const method of ['stats', 'get']) {
+test('authenticated downloads preserve exact bytes when metadata requests fail', async () => {
+  for (const space of ['public', 'private']) {
     const { session, calls } = sessionFor()
-    const error = new Error(`${method} failed`)
-    session.storage[method] = async () => {
+    session.storage.stats = async () => {
+      throw new Error('HEAD unavailable')
+    }
+    assert.deepEqual(
+      await data.readUploadedFile(session, space, 'file.bin'),
+      new Uint8Array([0, 128, 255]),
+    )
+    assert.deepEqual(calls.gets, [data.uploadedFilePath(space, 'file.bin')])
+  }
+})
+
+test('authenticated downloads preserve GET errors even when metadata is unavailable', async () => {
+  for (const metadataUnavailable of [false, true]) {
+    const { session } = sessionFor()
+    if (metadataUnavailable) {
+      session.storage.stats = async () => {
+        throw new Error('HEAD unavailable')
+      }
+    }
+    const error = new Error('GET failed')
+    session.storage.get = async () => {
       throw error
     }
     await assert.rejects(
       data.readUploadedFile(session, 'private', 'file.bin'),
       (actual) => actual === error,
     )
-    if (method === 'stats') assert.deepEqual(calls.gets, [])
   }
+})
+
+test('authenticated downloads do not fetch files known to be missing after HEAD failure', async () => {
+  const { session, calls } = sessionFor()
+  const error = { data: { statusCode: 404 } }
+  session.storage.stats = async () => {
+    throw error
+  }
+  await assert.rejects(
+    data.readUploadedFile(session, 'private', 'file.bin'),
+    (actual) => actual === error,
+  )
+  assert.deepEqual(calls.gets, [])
+})
+
+test('authenticated downloads stop stale requests even when metadata fails', async () => {
+  const { session, calls } = sessionFor()
+  let current = true
+  session.storage.stats = async () => {
+    current = false
+    throw new Error('HEAD unavailable')
+  }
+  await assert.rejects(
+    data.readUploadedFile(session, 'private', 'file.bin', () => current),
+    /view changed/,
+  )
+  assert.deepEqual(calls.gets, [])
 })
 
 test('authenticated downloads stop stale requests after metadata and cancel stale response bodies', async () => {

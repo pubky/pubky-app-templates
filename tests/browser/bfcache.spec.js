@@ -12,7 +12,10 @@ async function openApp(page, signedIn = true) {
       )
       if (!globalThis.sessionStorage.getItem('test-initialized')) {
         globalThis.sessionStorage.setItem('test-initialized', 'true')
-        if (signedIn) globalThis.localStorage.setItem('template:session', accountId)
+        if (signedIn) {
+          globalThis.localStorage.setItem('template:session', accountId)
+          globalThis.localStorage.setItem('test-sdk-records', JSON.stringify([accountId]))
+        }
       }
     },
     { accountId, signedIn },

@@ -88,9 +88,13 @@ export async function readUploadedFile(
 ) {
   requireStorageAccess(session, space)
   const path = uploadedFilePath(space, name)
-  const metadata = await session.storage.stats(path)
-  if (!metadata) throw new Error('This file no longer exists.')
-  if (metadata.contentLength !== undefined) checkByteLength(metadata.contentLength)
+  // Metadata may be unavailable while GET still works; streaming enforces the size limit.
+  const metadata = await session.storage.stats(path).catch((error) => {
+    if (statusCode(error) === 404) throw error
+    return null
+  })
+  if (metadata === undefined) throw new Error('This file no longer exists.')
+  if (metadata?.contentLength !== undefined) checkByteLength(metadata.contentLength)
   requireCurrent(isCurrent)
   return readLimitedResponse(await session.storage.get(path), isCurrent)
 }

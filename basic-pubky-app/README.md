@@ -2,6 +2,8 @@
 
 # Basic Pubky App
 
+Template version: **0.1.0** (`package.json`). The badge above tracks the separate Pubky SDK version.
+
 A Vite + TypeScript starter for standalone Pubky apps that use Homeservers directly as their data layer—without indexers, aggregators, or integration with pubky.app’s social data.
 
 This template focuses on Pubky’s core building blocks. The included vanilla HTML, TypeScript, and CSS are deliberately kept simple and exist only to demonstrate those features; the template does not prescribe a UI framework, frontend architecture, or styling system.

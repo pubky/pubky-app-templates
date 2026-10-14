@@ -875,6 +875,7 @@ function setError(error: unknown) {
 
 async function run(label: string, task: () => Promise<void>, options: { quiet?: boolean } = {}) {
   const previousSession = state.session
+  const previousRecovery = needsSessionRecovery()
   const token = Symbol(label)
   activeOperation = token
   state.busy = label
@@ -894,7 +895,7 @@ async function run(label: string, task: () => Promise<void>, options: { quiet?: 
   state.busy = undefined
   state.quietBusy = undefined
 
-  if (state.session !== previousSession) {
+  if (state.session !== previousSession || needsSessionRecovery() !== previousRecovery) {
     mount()
     return
   }

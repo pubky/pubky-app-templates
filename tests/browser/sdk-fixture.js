@@ -8,6 +8,7 @@ const state = (globalThis.__pubkyTest = {
   files: globalThis.__pubkySeed?.files ?? {},
   directories: globalThis.__pubkySeed?.directories ?? [],
   failures: globalThis.__pubkySeed?.failures ?? {},
+  persistentFailures: globalThis.__pubkySeed?.persistentFailures ?? {},
   calls: [],
   pendingLists: [],
   pendingSaves: [],
@@ -21,7 +22,12 @@ const state = (globalThis.__pubkyTest = {
 function call(method, path) {
   state.calls.push({ method, path })
   const persisted = JSON.parse(globalThis.sessionStorage.getItem('test-failures') || '{}')
-  const failure = state.failures[`${method}:${path}`] || state.failures[method] || persisted[method]
+  const failure =
+    state.failures[`${method}:${path}`] ||
+    state.failures[method] ||
+    persisted[method] ||
+    state.persistentFailures[`${method}:${path}`] ||
+    state.persistentFailures[method]
   delete state.failures[`${method}:${path}`]
   delete state.failures[method]
   delete persisted[method]
@@ -133,11 +139,20 @@ const storage = {
 }
 
 const savedIds = () => JSON.parse(globalThis.localStorage.getItem('test-sdk-records') || '[]')
+const pendingLogoutKey = (id) => `test-sdk-pending-logout:${id}`
+const recoveredLogoutKey = (id) => `test-sdk-recovered-logout:${id}`
+function sessionStateError(message) {
+  const error = new Error(message)
+  error.name = 'ClientStateError'
+  return error
+}
 function removeRecord(id) {
   globalThis.localStorage.setItem(
     'test-sdk-records',
     JSON.stringify(savedIds().filter((item) => item !== id)),
   )
+  globalThis.localStorage.removeItem(pendingLogoutKey(id))
+  globalThis.localStorage.removeItem(recoveredLogoutKey(id))
 }
 function sessionFor(id = accountId) {
   return {
@@ -146,10 +161,9 @@ function sessionFor(id = accountId) {
     info: { publicKey, capabilities: ['/pub/template/:rw', '/priv/template/:rw'] },
     storage,
     async signout() {
-      globalThis.sessionStorage.setItem('test-pending-revocation', id)
+      globalThis.localStorage.setItem(pendingLogoutKey(id), 'true')
       call('signout', id)
       removeRecord(id)
-      globalThis.sessionStorage.removeItem('test-pending-revocation')
     },
   }
 }
@@ -176,17 +190,13 @@ const client = {
     },
     async restore(id) {
       call('sessions.restore', id)
-      if (globalThis.sessionStorage.getItem('test-pending-revocation') === id) {
-        const recovered = globalThis.sessionStorage.getItem('test-revocation-recovered')
-        if (recovered) {
-          removeRecord(id)
-          globalThis.sessionStorage.removeItem('test-pending-revocation')
-        }
-        const error = new Error(
+      if (!savedIds().includes(id)) throw sessionStateError(`Stored Pubky session not found: ${id}`)
+      if (globalThis.localStorage.getItem(pendingLogoutKey(id))) {
+        const recovered = globalThis.localStorage.getItem(recoveredLogoutKey(id))
+        if (recovered) removeRecord(id)
+        throw sessionStateError(
           recovered ? 'Browser session is no longer valid.' : 'Browser session logout is pending.',
         )
-        error.name = 'ClientStateError'
-        throw error
       }
       return sessionFor(id)
     },
