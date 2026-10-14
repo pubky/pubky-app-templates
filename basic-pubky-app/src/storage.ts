@@ -9,6 +9,7 @@ export interface AppFile {
   body: string
   updatedAt: string
   metadata?: ResourceStats
+  metadataUnavailable?: boolean
 }
 
 /** Safe editor state. The SDK lock token stays inside this module. */
@@ -215,6 +216,11 @@ async function withLock<T>(
   operation: (sdkLock: StorageLock) => Promise<T>,
 ) {
   const state = locks.get(lock)
+  if (state && (!state.active || Date.now() >= state.expiresAt)) {
+    throw new Error(
+      'The file lock expired or was released. Lock and reopen the file before continuing.',
+    )
+  }
   if (
     !state ||
     state.session !== session ||
@@ -223,11 +229,6 @@ async function withLock<T>(
     state.sdkLock.path !== filePath(space, id)
   )
     throw new Error('The lock does not belong to this session and file.')
-  if (!state.active || Date.now() >= state.expiresAt) {
-    throw new Error(
-      'The file lock expired or was released. Lock and reopen the file before continuing.',
-    )
-  }
   const pending = Promise.resolve().then(() => operation(state.sdkLock))
   state.pending.add(pending)
   try {
@@ -282,9 +283,12 @@ function isFileId(id: string) {
 async function readFile(session: Session, path: Path, id: string) {
   const [data, metadata] = await Promise.all([
     session.storage.getJson(path),
-    session.storage.stats(path),
+    session.storage.stats(path).catch(() => null),
   ])
-  return { ...toAppFile(data, id), metadata }
+  return {
+    ...toAppFile(data, id),
+    ...(metadata === null ? { metadataUnavailable: true } : { metadata }),
+  }
 }
 
 function toAppFile(data: unknown, id: string): AppFile {

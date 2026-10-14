@@ -7,9 +7,10 @@ const accountId = 'browser-test:template'
 const state = (globalThis.__pubkyTest = {
   files: globalThis.__pubkySeed?.files ?? {},
   directories: globalThis.__pubkySeed?.directories ?? [],
-  failures: {},
+  failures: globalThis.__pubkySeed?.failures ?? {},
   calls: [],
   pendingLists: [],
+  pendingSaves: [],
   events: [],
   subscriptions: [],
   streamCanceled: false,
@@ -100,7 +101,20 @@ const storage = {
   },
   async lock(path) {
     call('lock', path)
-    return { path, timeoutSeconds: 60, free() {} }
+    let freed = false
+    return {
+      get path() {
+        if (freed) throw new Error('StorageLock used after free')
+        return path
+      },
+      get timeoutSeconds() {
+        if (freed) throw new Error('StorageLock used after free')
+        return 60
+      },
+      free() {
+        freed = true
+      },
+    }
   },
   async refreshLock(lock) {
     call('refreshLock', lock.path)
@@ -118,17 +132,29 @@ const storage = {
   },
 }
 
-const session = {
-  info: { publicKey, capabilities: ['/pub/template/:rw', '/priv/template/:rw'] },
-  storage,
-  async signout() {
-    globalThis.sessionStorage.setItem('test-pending-revocation', 'true')
-    call('signout')
-    globalThis.sessionStorage.removeItem('test-pending-revocation')
-  },
+const savedIds = () => JSON.parse(globalThis.localStorage.getItem('test-sdk-records') || '[]')
+function removeRecord(id) {
+  globalThis.localStorage.setItem(
+    'test-sdk-records',
+    JSON.stringify(savedIds().filter((item) => item !== id)),
+  )
 }
-const record = () => ({
-  id: accountId,
+function sessionFor(id = accountId) {
+  return {
+    fixtureId: id,
+    free() {},
+    info: { publicKey, capabilities: ['/pub/template/:rw', '/priv/template/:rw'] },
+    storage,
+    async signout() {
+      globalThis.sessionStorage.setItem('test-pending-revocation', id)
+      call('signout', id)
+      removeRecord(id)
+      globalThis.sessionStorage.removeItem('test-pending-revocation')
+    },
+  }
+}
+const record = (id = accountId) => ({
+  id,
   publicKey: publicKey.toString(),
   clientId: 'template',
   free() {},
@@ -138,7 +164,7 @@ const authFlow = () => ({
   saveDelegated: () => 'browser-test-flow',
   awaitApproval: () =>
     new Promise((resolve) => {
-      state.approveSignIn = () => resolve(session)
+      state.approveSignIn = (id) => resolve(sessionFor(id))
     }),
   free() {},
 })
@@ -146,27 +172,36 @@ const client = {
   browserSessionStore: {
     async list() {
       call('sessions.list')
-      return [record()]
+      return savedIds().map(record)
     },
-    async restore() {
-      call('sessions.restore')
-      if (globalThis.sessionStorage.getItem('test-pending-revocation')) {
+    async restore(id) {
+      call('sessions.restore', id)
+      if (globalThis.sessionStorage.getItem('test-pending-revocation') === id) {
         const recovered = globalThis.sessionStorage.getItem('test-revocation-recovered')
-        if (recovered) globalThis.sessionStorage.removeItem('test-pending-revocation')
+        if (recovered) {
+          removeRecord(id)
+          globalThis.sessionStorage.removeItem('test-pending-revocation')
+        }
         const error = new Error(
           recovered ? 'Browser session is no longer valid.' : 'Browser session logout is pending.',
         )
         error.name = 'ClientStateError'
         throw error
       }
-      return session
+      return sessionFor(id)
     },
-    async remove() {
-      call('sessions.remove')
+    async remove(id) {
+      call('sessions.remove', id)
+      removeRecord(id)
     },
-    async save() {
-      call('sessions.save')
-      return record()
+    async save(session) {
+      call('sessions.save', session.fixtureId)
+      if (state.holdSaves) await new Promise((resolve) => state.pendingSaves.push(resolve))
+      globalThis.localStorage.setItem(
+        'test-sdk-records',
+        JSON.stringify([...new Set([...savedIds(), session.fixtureId])]),
+      )
+      return record(session.fixtureId)
     },
     async isAvailable() {
       return true

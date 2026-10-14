@@ -131,7 +131,19 @@ function fakeSession(urls, record = {}) {
       },
       lock: async (path) => {
         calls.locks.push(path)
-        return { path, timeoutSeconds: 60, free: () => calls.freed.push(path) }
+        let freed = false
+        return {
+          get path() {
+            assert.equal(freed, false, 'SDK lock accessed after free')
+            return path
+          },
+          timeoutSeconds: 60,
+          free: () => {
+            assert.equal(freed, false, 'SDK lock freed twice')
+            freed = true
+            calls.freed.push(path)
+          },
+        }
       },
       putTextLocked: async (lock, body) => {
         calls.writes.push({ path: lock.path, data: JSON.parse(body) })
@@ -227,6 +239,46 @@ for (const [space, directory] of Object.entries(directories)) {
       }
     }
   })
+
+  test(`${space}: failed optional metadata preserves notes and permits locked editing`, async () => {
+    const { session } = fakeSession([address(`${directory}note.json`)], {
+      title: 'Readable note',
+      body: 'Keep this content available',
+    })
+    session.storage.stats = async () => {
+      throw Object.assign(new Error('Metadata unavailable'), { data: { statusCode: 503 } })
+    }
+
+    const [file] = await storage.listFiles(session, space)
+    assert.equal(file.title, 'Readable note')
+    assert.equal(file.body, 'Keep this content available')
+    assert.equal(file.metadata, undefined)
+    assert.equal(file.metadataUnavailable, true)
+
+    const opened = await storage.acquireFileLock(session, space, file.id)
+    assert.equal(opened.file.metadataUnavailable, true)
+    await storage.saveFile(session, space, { ...file, body: 'Updated' }, opened.lock)
+    await storage.releaseFileLock(opened.lock)
+
+    session.storage.stats = async () => undefined
+    const [withoutHeaders] = await storage.listFiles(session, space)
+    assert.equal(withoutHeaders.metadata, undefined)
+    assert.notEqual(withoutHeaders.metadataUnavailable, true)
+
+    session.storage.stats = async () => ({ contentLength: 42 })
+    const [recovered] = await storage.listFiles(session, space)
+    assert.equal(recovered.metadata.contentLength, 42)
+    assert.notEqual(recovered.metadataUnavailable, true)
+
+    const contentError = new Error('Cannot read file contents')
+    session.storage.getJson = async () => {
+      throw contentError
+    }
+    session.storage.stats = async () => {
+      throw new Error('Metadata unavailable')
+    }
+    await assert.rejects(storage.listFiles(session, space), (error) => error === contentError)
+  })
 }
 
 test('storage access respects root, separate actions, and directory boundaries', () => {
@@ -297,6 +349,30 @@ test('a lost lock never falls back to an unlocked write', async () => {
   assert.equal(attempts, 1)
   assert.deepEqual(calls.writes, [])
   await storage.releaseFileLock(lock)
+})
+
+test('released locks reject saves, renewals and deletions before touching freed SDK handles', async () => {
+  const { session, calls } = fakeSession([], {})
+  const { lock } = await storage.acquireFileLock(session, 'public', 'note')
+  await storage.releaseFileLock(lock)
+
+  await assert.rejects(
+    storage.saveFile(session, 'public', { id: 'note', title: 'Title', body: 'Body' }, lock),
+    /expired or was released/,
+  )
+  await assert.rejects(
+    storage.renewFileLock(session, 'public', 'note', lock),
+    /expired or was released/,
+  )
+  await assert.rejects(
+    storage.deleteFile(session, 'public', 'note', lock),
+    /expired or was released/,
+  )
+  await storage.releaseFileLock(lock)
+  assert.deepEqual(calls.writes, [])
+  assert.deepEqual(calls.deletes, [])
+  assert.equal(calls.unlocks.length, 1)
+  assert.equal(calls.freed.length, 1)
 })
 
 test('renew uses the granted lifetime and expired locks must be reacquired', async () => {

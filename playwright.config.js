@@ -12,12 +12,21 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   projects: [
-    { name: 'chromium', use: devices['Desktop Chrome'] },
-    { name: 'firefox', use: devices['Desktop Firefox'] },
+    { name: 'chromium', testIgnore: '**/bfcache.spec.js', use: devices['Desktop Chrome'] },
+    { name: 'firefox', testIgnore: '**/bfcache.spec.js', use: devices['Desktop Firefox'] },
+    {
+      name: 'chromium-bfcache',
+      testMatch: '**/bfcache.spec.js',
+      use: {
+        ...devices['Desktop Chrome'],
+        // Full Chromium's headless mode supports BFCache; headless-shell does not.
+        channel: 'chromium',
+        launchOptions: { ignoreDefaultArgs: ['--disable-back-forward-cache'] },
+      },
+    },
   ],
   webServer: {
-    command:
-      'node basic-pubky-app/node_modules/vite/bin/vite.js --config tests/browser/vite.config.js',
+    command: 'node tests/browser/serve.js',
     url: 'http://127.0.0.1:4175',
     reuseExistingServer: false,
   },

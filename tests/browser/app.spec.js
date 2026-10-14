@@ -1,5 +1,4 @@
-import { test as base, expect } from '@playwright/test'
-import { URL } from 'node:url'
+import { test, expect } from './browser-test.js'
 import { Buffer } from 'node:buffer'
 
 const owner = '8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo'
@@ -11,36 +10,19 @@ const note = {
 }
 const upload = { bytes: [0, 128, 255], metadata: { contentLength: 3 } }
 
-const test = base.extend({
-  page: async ({ page }, use) => {
-    const externalRequests = []
-    const errors = []
-    page.on('pageerror', (error) => errors.push(error.message))
-    page.context().on('page', (otherPage) => {
-      otherPage.on('pageerror', (error) => errors.push(error.message))
-    })
-    await page.context().route('**/*', (route) => {
-      const url = new URL(route.request().url())
-      if (url.origin === 'http://127.0.0.1:4175') return route.continue()
-      externalRequests.push(url.href)
-      return route.abort('blockedbyclient')
-    })
-    await use(page)
-    expect(externalRequests, 'Tests must never contact real relays or homeservers').toEqual([])
-    expect(errors, 'Uncaught browser errors').toEqual([])
-  },
-})
-
-async function openApp(page, { signedIn = true, files = {}, directories = [] } = {}) {
+async function openApp(
+  page,
+  { signedIn = true, files = {}, directories = [], failures = {} } = {},
+) {
   await page.addInitScript(
-    ({ signedIn, files, directories }) => {
-      globalThis.__pubkySeed = { files, directories }
+    ({ signedIn, files, directories, failures }) => {
+      globalThis.__pubkySeed = { files, directories, failures }
       if (!globalThis.sessionStorage.getItem('test-initialized')) {
         globalThis.sessionStorage.setItem('test-initialized', 'true')
         if (signedIn) globalThis.localStorage.setItem('template:session', 'browser-test:template')
       }
     },
-    { signedIn, files, directories },
+    { signedIn, files, directories, failures },
   )
   await page.goto('/')
   await expect(page.locator(signedIn ? '#file-form' : '#authorize-ring')).toBeVisible()
@@ -69,6 +51,29 @@ async function fillNote(page) {
 }
 
 const submit = (page) => page.locator('#file-form button[type="submit"]')
+
+for (const kind of ['note', 'upload']) {
+  test(`cold loading a ${kind} with unavailable metadata keeps both file types usable`, async ({
+    page,
+  }) => {
+    await openApp(page, {
+      files: { [notePath]: note, [uploadPath]: upload },
+      failures: { [`stats:${kind === 'note' ? notePath : uploadPath}`]: 'Metadata unavailable' },
+    })
+    const noteRow = page.locator('#files-list li').filter({ hasText: 'Existing note' })
+    const uploadRow = page.locator('#files-list li').filter({ hasText: 'example.bin' })
+    await expect(noteRow).toBeVisible()
+    await expect(uploadRow).toBeVisible()
+    await expect(kind === 'note' ? noteRow : uploadRow).toContainText('Metadata unavailable.')
+    await expect(kind === 'note' ? uploadRow : noteRow).not.toContainText('Metadata unavailable.')
+    await expect(noteRow.getByRole('button', { name: 'Lock & edit', exact: true })).toBeEnabled()
+    await expect(uploadRow.getByRole('button', { name: 'Download', exact: true })).toBeEnabled()
+    await page.getByRole('button', { name: 'Private storage', exact: true }).click()
+    await page.getByRole('button', { name: 'Public storage', exact: true }).click()
+    await expect(page.locator('#files-list li')).toHaveCount(2)
+    await expect(page.locator('#files-list')).not.toContainText('Metadata unavailable.')
+  })
+}
 
 for (const modifyDraft of [false, true]) {
   test(`reopening a saved note after a concurrent refresh ${modifyDraft ? 'preserves a changed draft and reports a conflict' : 'loads the newer remote version'}`, async ({
@@ -128,6 +133,74 @@ test('one saved session restores after reload without account picker controls', 
     await page.evaluate(() => globalThis.localStorage.getItem('template:session:accounts')),
   ).toBeNull()
 })
+
+for (const failCleanup of [false, true]) {
+  test(`a superseded grant ${failCleanup ? 'keeps failed revocation durable across reload' : "is revoked without replacing another tab's selected grant"}`, async ({
+    page,
+  }) => {
+    await openApp(page, { signedIn: false })
+    await page.evaluate(() => {
+      globalThis.__pubkyTest.holdSaves = true
+      globalThis.__pubkyTest.approveSignIn('stale-grant')
+    })
+    await expect.poll(() => page.evaluate(() => globalThis.__pubkyTest.pendingSaves.length)).toBe(1)
+    const otherPage = await page.context().newPage()
+    await otherPage.goto('/')
+    await expect(otherPage.locator('#authorize-ring')).toBeVisible()
+    await expect
+      .poll(() => otherPage.evaluate(() => typeof globalThis.__pubkyTest.approveSignIn))
+      .toBe('function')
+    await otherPage.evaluate(() => globalThis.__pubkyTest.approveSignIn('selected-grant'))
+    await expect(otherPage.locator('#sign-out')).toBeEnabled()
+    if (failCleanup)
+      await failNext(page, 'signout:stale-grant', 'Revocation temporarily unavailable')
+    await page.evaluate(() => {
+      globalThis.__pubkyTest.holdSaves = false
+      globalThis.__pubkyTest.pendingSaves.forEach((resolve) => resolve())
+    })
+    await expect
+      .poll(() => calls(page, 'signout'))
+      .toContainEqual({ method: 'signout', path: 'stale-grant' })
+    expect(await page.evaluate(() => globalThis.localStorage.getItem('template:session'))).toBe(
+      'selected-grant',
+    )
+    if (failCleanup) {
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            Object.keys(globalThis.localStorage).filter((key) =>
+              key.includes('pending-revocation'),
+            ),
+          ),
+        )
+        .toHaveLength(1)
+      await page.reload()
+      await expect(page.locator('#retry-saved-session')).toBeEnabled()
+      await expect(page.locator('#authorize-ring, #file-form')).toHaveCount(0)
+      expect(await page.evaluate(() => globalThis.localStorage.getItem('template:session'))).toBe(
+        'selected-grant',
+      )
+      await page.evaluate(() =>
+        globalThis.sessionStorage.setItem('test-revocation-recovered', 'true'),
+      )
+      await page.locator('#retry-saved-session').click()
+    }
+    await expect(page.locator('#sign-out')).toBeEnabled()
+    await expect
+      .poll(() =>
+        page.evaluate(() => JSON.parse(globalThis.localStorage.getItem('test-sdk-records'))),
+      )
+      .toEqual(['selected-grant'])
+    expect(
+      await page.evaluate(() =>
+        Object.keys(globalThis.localStorage).filter((key) => key.includes('pending-revocation')),
+      ),
+    ).toEqual([])
+    expect(await page.evaluate(() => globalThis.localStorage.getItem('template:session'))).toBe(
+      'selected-grant',
+    )
+  })
+}
 
 test('failed signout retains the session and must be retried before signing in again', async ({
   page,
@@ -335,7 +408,12 @@ for (const failure of ['list:/pub/template/files/', 'list:/pub/template/attachme
     await failNext(page, failure)
     await submit(page).click()
     await expect(page.locator('#status')).toContainText('File saved:')
-    await expect(page.locator('#status')).toContainText(/refresh/i)
+    if (failure === 'stats') {
+      await expect(page.locator('#files-list')).toContainText('Metadata unavailable.')
+      await expect(page.locator('#status')).not.toContainText(/refresh/i)
+    } else {
+      await expect(page.locator('#status')).toContainText(/refresh/i)
+    }
     await expect(page.getByLabel('Title', { exact: true })).toHaveValue('')
     await expect(page.getByLabel('Body', { exact: true })).toHaveValue('')
     await expect(page.locator('#files-list')).toContainText('A new note')

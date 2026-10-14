@@ -9,6 +9,7 @@ const PAGE_SIZE = 50
 export interface UploadedFile {
   name: string
   metadata?: ResourceStats
+  metadataUnavailable?: boolean
 }
 
 // This template keeps uploads in its existing attachments/ folder; Pubky treats it as a normal path.
@@ -55,10 +56,10 @@ export async function listUploadedFiles(
   }
   requireCurrent(isCurrent)
   return Promise.all(
-    [...new Set(names)].map(async (name): Promise<UploadedFile> => ({
-      name,
-      metadata: await session.storage.stats(uploadedFilePath(space, name)),
-    })),
+    [...new Set(names)].map(async (name): Promise<UploadedFile> => {
+      const metadata = await session.storage.stats(uploadedFilePath(space, name)).catch(() => null)
+      return { name, ...(metadata === null ? { metadataUnavailable: true } : { metadata }) }
+    }),
   )
 }
 

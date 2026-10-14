@@ -141,6 +141,42 @@ test('uploaded file listings validate owner and app folder before requesting met
   )
 })
 
+test('failed optional upload metadata preserves listed files and clears after recovery', async () => {
+  for (const space of ['public', 'private']) {
+    const directory =
+      space === 'public' ? '/pub/template/attachments/' : '/priv/template/attachments/'
+    const { session } = sessionFor([
+      address(`${directory}healthy.bin`),
+      address(`${directory}unavailable.bin`),
+    ])
+    session.storage.stats = async (path) => {
+      if (path.endsWith('/unavailable.bin')) {
+        throw Object.assign(new Error('Metadata unavailable'), { data: { statusCode: 503 } })
+      }
+      return { contentLength: 3 }
+    }
+
+    const [healthy, unavailable] = await data.listUploadedFiles(session, space)
+    assert.equal(healthy.name, 'healthy.bin')
+    assert.equal(healthy.metadata.contentLength, 3)
+    assert.notEqual(healthy.metadataUnavailable, true)
+    assert.equal(unavailable.name, 'unavailable.bin')
+    assert.equal(unavailable.metadata, undefined)
+    assert.equal(unavailable.metadataUnavailable, true)
+
+    session.storage.stats = async () => undefined
+    const withoutHeaders = await data.listUploadedFiles(session, space)
+    assert.equal(withoutHeaders.length, 2)
+    assert.ok(withoutHeaders.every((file) => !file.metadataUnavailable))
+
+    session.storage.stats = async () => ({ contentLength: 3 })
+    const recovered = await data.listUploadedFiles(session, space)
+    assert.ok(
+      recovered.every((file) => file.metadata?.contentLength === 3 && !file.metadataUnavailable),
+    )
+  }
+})
+
 test('shallow upload listings skip directories and preserve pagination and file deduplication', async () => {
   const directory = '/priv/template/attachments/'
   const firstPage = Array.from({ length: 50 }, (_, index) =>
@@ -196,7 +232,7 @@ test('only a missing upload directory is treated as an empty listing', async () 
   }
 })
 
-test('upload listing failures and stale views cannot return partial file metadata', async () => {
+test('stale upload listings stop before requesting file metadata', async () => {
   const { session, calls } = sessionFor([address('/priv/template/attachments/one.bin')])
   let current = true
   session.storage.list = async () => {
@@ -208,16 +244,6 @@ test('upload listing failures and stale views cannot return partial file metadat
     /view changed/,
   )
   assert.deepEqual(calls.metadata, [])
-
-  const failed = sessionFor([address('/priv/template/attachments/one.bin')])
-  const error = new Error('metadata unavailable')
-  failed.session.storage.stats = async () => {
-    throw error
-  }
-  await assert.rejects(
-    data.listUploadedFiles(failed.session, 'private'),
-    (actual) => actual === error,
-  )
 })
 
 test('uploaded filenames cannot redirect downloads or deletes', async () => {
@@ -550,4 +576,21 @@ test('file UI escapes metadata and handles invalid server dates without crashing
   assert.ok(html.includes('&lt;img'))
   assert.ok(!html.includes('<script>'))
   assert.ok(!html.includes('<img'))
+})
+
+test('file UI reports unavailable metadata on affected notes and uploads only', () => {
+  const note = { id: 'note', title: 'Note', body: '', updatedAt: '' }
+  const upload = { name: 'upload.bin' }
+  const unavailable = filesUi.filesPanelHtml(
+    [{ ...note, metadataUnavailable: true }],
+    'public',
+    undefined,
+    [{ ...upload, metadataUnavailable: true }],
+  )
+  assert.equal((unavailable.match(/Metadata unavailable\./g) || []).length, 2)
+  assert.ok(unavailable.includes('data-edit-id="note"'))
+  assert.ok(unavailable.includes('data-upload-action="download"'))
+
+  const available = filesUi.filesPanelHtml([note], 'public', undefined, [upload])
+  assert.ok(!available.includes('Metadata unavailable.'))
 })

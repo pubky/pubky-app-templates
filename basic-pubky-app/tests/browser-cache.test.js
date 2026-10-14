@@ -8,6 +8,10 @@ import { createServer } from 'vite'
 function memoryStorage() {
   const values = new Map()
   return {
+    get length() {
+      return values.size
+    },
+    key: (index) => [...values.keys()][index] ?? null,
     getItem: (key) => values.get(key) ?? null,
     setItem: (key, value) => values.set(key, String(value)),
     removeItem: (key) => values.delete(key),
@@ -76,7 +80,7 @@ async function until(predicate) {
   assert.ok(predicate(), 'App did not finish the expected lifecycle transition')
 }
 
-async function setup(t, { restoreError } = {}) {
+async function setup(t, { restoreError, cleanupError, selected = true } = {}) {
   const local = memoryStorage()
   const events = new globalThis.EventTarget()
   Object.assign(globalThis, {
@@ -86,6 +90,10 @@ async function setup(t, { restoreError } = {}) {
     document: { querySelector: () => null },
     Element: TestButton,
     HTMLFormElement: TestButton,
+  })
+  Object.defineProperty(globalThis.navigator, 'locks', {
+    configurable: true,
+    value: { request: (_name, task) => task() },
   })
   const server = await createServer({
     root: fileURLToPath(new URL('..', import.meta.url)),
@@ -100,6 +108,7 @@ async function setup(t, { restoreError } = {}) {
   const app = await server.ssrLoadModule('/src/app.ts')
   const session = (id) => ({
     id,
+    free() {},
     info: { publicKey: id, capabilities: ['/pub/template/:rw', '/priv/template/:rw'] },
     storage: { list: async () => [] },
   })
@@ -114,17 +123,24 @@ async function setup(t, { restoreError } = {}) {
   t.mock.method(BrowserSessionStore.prototype, 'save', async (session) => record(session))
   const available = t.mock.method(BrowserSessionStore.prototype, 'isAvailable', async () => false)
   t.mock.method(BrowserSessionStore.prototype, 'remove', async () => {})
+  let starting = true
   let restore = async (id) => {
-    if (restoreError) throw restoreError
+    if (id === 'abandoned:grant' && cleanupError) throw cleanupError
+    if (restoreError && !starting) throw restoreError
     return id === original.id ? original : other
   }
   t.mock.method(BrowserSessionStore.prototype, 'restore', (id) => restore(id))
   await auth.saveSession(original)
+  starting = false
+  if (cleanupError) local.setItem('template:session:pending-revocation:abandoned:grant', '1')
+  if (!selected) local.removeItem('template:session')
   const root = editorRoot()
   globalThis.document.querySelector = (selector) => root.querySelector(selector)
   app.start(root)
   await until(() =>
-    restoreError ? Boolean(root.status.innerHTML) : root.innerHTML.includes('id="file-form"'),
+    restoreError || cleanupError
+      ? Boolean(root.status.innerHTML)
+      : root.innerHTML.includes('id="file-form"'),
   )
   await setImmediate()
   root.title.value = 'Unsaved title'
@@ -145,6 +161,45 @@ async function setup(t, { restoreError } = {}) {
     hide: () => emit('pagehide', { persisted: true }),
     show: () => emit('pageshow', { persisted: true }),
   }
+}
+
+for (const selected of [false, true]) {
+  test(`abandoned-grant cleanup can be retried ${selected ? 'without replacing the selected session' : 'without starting a replacement sign-in'}`, async (t) => {
+    const { auth, root, original, available, setRestore } = await setup(t, {
+      cleanupError: new Error('Abandoned sign-in revocation is offline'),
+      selected,
+    })
+    assert.equal(available.mock.callCount(), 0)
+    assert.ok(root.innerHTML.includes('id="retry-saved-session"'))
+    assert.ok(!root.innerHTML.includes('id="file-form"'))
+    assert.ok(!root.innerHTML.includes('id="refresh-ring-signin"'))
+    assert.ok(root.status.innerHTML.includes('Abandoned sign-in revocation is offline'))
+
+    const formData = t.mock.method(globalThis, 'FormData', function () {
+      return { get: () => '' }
+    })
+    root.click('refresh-ring-signin')
+    root.submit('development-signup-form')
+    await setImmediate()
+    assert.equal(available.mock.callCount(), 0)
+    assert.equal(formData.mock.callCount(), 0)
+
+    setRestore(async (id) => {
+      if (id === original.id) return original
+      throw Object.assign(new Error('Browser session was signed out.'), {
+        name: 'ClientStateError',
+      })
+    })
+    root.click('retry-saved-session')
+    await until(() =>
+      selected
+        ? root.innerHTML.includes('id="file-form"')
+        : root.status.innerHTML.includes('secure browser context'),
+    )
+    assert.equal(auth.getSavedSessionId(), selected ? original.id : null)
+    assert.ok(!root.innerHTML.includes('id="retry-saved-session"'))
+    assert.equal(available.mock.callCount(), selected ? 0 : 1)
+  })
 }
 
 for (const historyFails of [false, true]) {

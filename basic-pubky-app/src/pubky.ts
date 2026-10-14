@@ -14,6 +14,7 @@ const SESSION_KEY = STORAGE_NAMESPACE
   ? `${STORAGE_NAMESPACE}:${APP_CLIENT_ID}:session`
   : `${APP_CLIENT_ID}:session`
 const PENDING_AUTH_KEY = `${SESSION_KEY}:pending-auth`
+const PENDING_REVOCATION_PREFIX = `${SESSION_KEY}:pending-revocation:`
 const sessionIds = new WeakMap<Session, string>()
 const RING_AUTH_CANCELED_ERROR_NAME = 'RingAuthCanceled'
 const RING_AUTH_EXPIRED_ERROR_NAME = 'RingAuthExpired'
@@ -133,17 +134,82 @@ export async function saveSession(
 ) {
   const stored = await pubky.browserSessionStore.save(session)
   try {
-    if (beforeSelect) await beforeSelect()
-    const selected = isCurrent()
-    if (selected) localStorage.setItem(SESSION_KEY, stored.id)
     sessionIds.set(session, stored.id)
-    return selected
+    const cleanupKey = `${PENDING_REVOCATION_PREFIX}${stored.id}`
+    await withSessionSelection(async () => {
+      if (getSavedSessionId() !== stored.id) localStorage.setItem(cleanupKey, '1')
+    })
+    // A cached page must not hold the cross-tab selection lock while hidden.
+    try {
+      if (beforeSelect) await beforeSelect()
+    } catch (error) {
+      await withSessionSelection(() => discardSavedSession(session, stored.id))
+      throw error
+    }
+    return await withSessionSelection(async () => {
+      let selected = false
+      try {
+        if (isCurrent()) {
+          // Cleanup in another tab may have revoked this grant while its save completed.
+          const restored = await pubky.browserSessionStore.restore(stored.id)
+          restored.free()
+          if (isCurrent()) {
+            localStorage.setItem(SESSION_KEY, stored.id)
+            localStorage.removeItem(cleanupKey)
+            selected = true
+          }
+        }
+        return selected
+      } finally {
+        if (!selected) await discardSavedSession(session, stored.id)
+      }
+    })
   } finally {
     stored.free()
   }
 }
 
+async function discardSavedSession(session: Session, id: string) {
+  // Another tab may have selected this exact grant while its save was pending.
+  const key = `${PENDING_REVOCATION_PREFIX}${id}`
+  if (getSavedSessionId() === id) {
+    localStorage.removeItem(key)
+    return
+  }
+  localStorage.setItem(key, '1')
+  try {
+    await session.signout()
+  } catch (error) {
+    if (!isInvalidSavedSessionError(error)) throw error
+  }
+  localStorage.removeItem(key)
+}
+
+/** Keep abandoned approvals durable until their remote grant has been revoked. */
+export function discardSession(session: Session) {
+  return saveSession(session, () => false)
+}
+
+export function hasPendingSessionCleanup() {
+  return pendingRevocationIds().length > 0
+}
+
 export async function restoreSavedSession() {
+  if (hasPendingSessionCleanup())
+    await withSessionSelection(async () => {
+      for (const id of pendingRevocationIds()) {
+        if (id !== getSavedSessionId()) {
+          try {
+            // Restore retries a pending SDK logout, or returns a grant still needing revocation.
+            const session = await pubky.browserSessionStore.restore(id)
+            await session.signout()
+          } catch (error) {
+            if (!isInvalidSavedSessionError(error)) throw error
+          }
+        }
+        localStorage.removeItem(`${PENDING_REVOCATION_PREFIX}${id}`)
+      }
+    })
   const savedId = getSavedSessionId()
   if (!savedId) return undefined
   try {
@@ -158,6 +224,25 @@ export async function restoreSavedSession() {
     }
     throw error
   }
+}
+
+async function withSessionSelection<T>(task: () => Promise<T>) {
+  // Firefox can report a rejected lock callback as uncaught even when request() is caught.
+  const result = await navigator.locks.request(`${SESSION_KEY}:selection`, async () => {
+    try {
+      return { ok: true as const, value: await task() }
+    } catch (error) {
+      return { ok: false as const, error }
+    }
+  })
+  if (!result.ok) throw result.error
+  return result.value
+}
+
+function pendingRevocationIds() {
+  return Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+    .filter((key): key is string => Boolean(key?.startsWith(PENDING_REVOCATION_PREFIX)))
+    .map((key) => key.slice(PENDING_REVOCATION_PREFIX.length))
 }
 
 export async function signOut(session: Session) {
@@ -207,6 +292,7 @@ export function isRingAuthExpired(error: unknown) {
 
 function awaitRingApproval(flow: GrantAuthFlow, pending: string): RingAuthFlow {
   let canceled = false
+  let abandoned = false
   let freed = false
   let rejectCanceled: (error: Error) => void = () => {}
   const cancellation = new Promise<never>((_, reject) => {
@@ -223,6 +309,7 @@ function awaitRingApproval(flow: GrantAuthFlow, pending: string): RingAuthFlow {
   }
   const stop = (abandon: boolean) => {
     canceled = true
+    abandoned ||= abandon
     if (abandon) clearPendingAuth(pending)
     rejectCanceled(ringAuthCanceledError())
     release()
@@ -231,7 +318,10 @@ function awaitRingApproval(flow: GrantAuthFlow, pending: string): RingAuthFlow {
   const approval = (async () => {
     try {
       const session = await flow.awaitApproval()
-      if (canceled) throw ringAuthCanceledError()
+      if (canceled) {
+        if (abandoned) await discardSession(session)
+        throw ringAuthCanceledError()
+      }
       clearPendingAuth(pending)
       return session
     } catch (error) {

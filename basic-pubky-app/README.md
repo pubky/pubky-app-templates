@@ -55,7 +55,7 @@ Pending Ring authorization is saved temporarily in the current tab's session sto
 
 Signing out revokes the session and clears affected tabs, including their private data and subscriptions. If remote sign-out fails, the app retains the saved session and offers a retry; other authenticated actions stay disabled while logout is pending. A previous SDK session is migrated by the SDK when restored. Reload older open tabs after upgrading so every tab uses the same session lifecycle.
 
-If restoring a saved session fails, use **Retry saved session** before signing in again. This also retries a pending sign-out after a reload, keeping its revocation tracked until the SDK confirms completion.
+If restoring a saved session fails, use **Retry session recovery** before signing in again. This also retries a pending sign-out after a reload, keeping its revocation tracked until the SDK confirms completion. Sign-ins superseded by another tab are revoked; if that cleanup fails, the same recovery action retries it without replacing the selected session.
 
 ## Public and Private Storage
 
@@ -87,6 +87,8 @@ The Editor offers **Write a file** or **Choose a file**, with one **Upload** but
 Both appear in the same Files list. Notes support editing with locks; uploads can be downloaded or deleted without interpreting their contents as note JSON, even if the uploaded filename ends in `.json`. Uploading a file preserves the current note draft.
 
 A completed save, upload, or deletion updates the form and file list immediately. If refreshing the list then fails, the app keeps the success message and reports the refresh failure separately; the completed operation does not need to be repeated.
+
+File-list metadata is optional: if its request fails, the file stays in the list with a **Metadata unavailable** notice and its normal controls.
 
 The reusable `uploadFileBytes(session, space, file)` function in [`src/storage-tools-data.ts`](src/storage-tools-data.ts) demonstrates `session.storage.putBytes`; note creation in [`src/storage.ts`](src/storage.ts) demonstrates `session.storage.putJson`. Uploads and public reads have a 5 MiB limit. Uploaded files keep unique names under `/pub/template/attachments/` or `/priv/template/attachments/` so previous uploads remain accessible. Those folder names are a template convention, not a distinct SDK storage type; the public/private access rules apply to notes and uploads equally. File metadata describes the stored resource; downloaded content is treated as a file rather than executed in the page.
 
@@ -121,7 +123,7 @@ sessions separate.
 
 Run `npm test` for session persistence and cancellation, capability boundaries, file locks and storage, public resource validation, and event history/stream cleanup. These tests use the existing Vite tooling and Node's test runner; they do not need a running Homeserver. Run `npm run build` to type-check and build the app.
 
-The parent repository also runs Chromium and Firefox regression tests in CI. They exercise the real UI with controlled SDK responses, including failed writes, successful writes followed by failed refreshes, downloads, and page navigation. The browser tooling and fixtures live outside this template, so copying it does not add browser-test dependencies. These tests complement live testnet checks; they do not replace SDK/Homeserver integration testing.
+The parent repository also runs Chromium and Firefox regression tests in CI. They exercise the real UI with controlled SDK responses, including failed writes, successful writes followed by failed refreshes, downloads, and page navigation. Dedicated Chromium tests verify actual back-forward cache restoration, including draft preservation and session invalidation while away. The browser tooling and fixtures live outside this template, so copying it does not add browser-test dependencies. These tests complement live testnet checks; they do not replace SDK/Homeserver integration testing.
 
 ## Keeping Only the Examples You Need
 

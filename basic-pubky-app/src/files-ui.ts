@@ -147,6 +147,7 @@ function uploadedFileItem(file: UploadedFile, space: StorageSpace, busy?: string
         <strong title="${escapeHtml(uploadedFilePath(space, file.name))}">${escapeHtml(file.name)}</strong>
         <span>Uploaded file</span>
         ${file.metadata ? `<small>${escapeHtml(metadataLabel(file.metadata))}</small>` : ''}
+        ${file.metadataUnavailable ? '<small>Metadata unavailable.</small>' : ''}
       </div>
       <div class="actions">
         <button type="button" data-upload-action="download" data-upload-name="${escapeHtml(file.name)}" ${disabledAttr(Boolean(busy))}>Download</button>
@@ -164,6 +165,7 @@ function fileItem(file: AppFile, space: StorageSpace, busy?: string) {
         <strong title="${escapeHtml(filePath(space, file.id))}">${escapeHtml(file.title)}</strong>
         <span>${escapeHtml(validDate(file.updatedAt))}</span>
         ${file.metadata ? `<small>${escapeHtml(metadataLabel(file.metadata))}</small>` : ''}
+        ${file.metadataUnavailable ? '<small>Metadata unavailable.</small>' : ''}
       </div>
       <div class="actions">
         <button type="button" data-edit-id="${escapeHtml(file.id)}" ${disabledAttr(Boolean(busy))}>Lock &amp; edit</button>

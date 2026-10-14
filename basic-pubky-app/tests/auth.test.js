@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { after, before, beforeEach, test } from 'node:test'
+import { setImmediate } from 'node:timers'
 import { fileURLToPath, URL } from 'node:url'
 import { BrowserSessionStore, validateCapabilities } from '@synonymdev/pubky'
 import { createServer } from 'vite'
@@ -11,6 +12,10 @@ let lifecycle
 const memoryStorage = () => {
   const values = new Map()
   return {
+    get length() {
+      return values.size
+    },
+    key: (index) => [...values.keys()][index] ?? null,
     getItem: (key) => values.get(key) ?? null,
     setItem: (key, value) => values.set(key, String(value)),
     removeItem: (key) => values.delete(key),
@@ -22,11 +27,29 @@ const local = memoryStorage()
 const pending = memoryStorage()
 const events = new globalThis.EventTarget()
 Object.assign(globalThis, { localStorage: local, sessionStorage: pending, window: events })
+const selectionLocks = new Map()
+Object.defineProperty(globalThis, 'navigator', {
+  configurable: true,
+  value: {
+    locks: {
+      request(name, task) {
+        const result = (selectionLocks.get(name) ?? Promise.resolve()).then(task)
+        selectionLocks.set(
+          name,
+          result.catch(() => {}),
+        )
+        return result
+      },
+    },
+  },
+})
 
 beforeEach((t) => {
   local.clear()
   pending.clear()
+  selectionLocks.clear()
   t.mock.method(BrowserSessionStore.prototype, 'isAvailable', async () => true)
+  t.mock.method(BrowserSessionStore.prototype, 'restore', async () => ({ free() {} }))
 })
 
 function deferred() {
@@ -306,7 +329,8 @@ for (const selectionChanged of [false, true]) {
     const save = t.mock.method(BrowserSessionStore.prototype, 'save', () => stored.promise)
     let active = true
     const attempt = lifecycle.createRingAuthAttempt(auth.getSavedSessionId, () => active)
-    const result = auth.saveSession({}, attempt.isCurrent, attempt.waitUntilVisible)
+    const session = { signout: t.mock.fn(async () => {}) }
+    const result = auth.saveSession(session, attempt.isCurrent, attempt.waitUntilVisible)
     attempt.pause()
     stored.resolve(savedRecord)
     await stored.promise
@@ -325,6 +349,7 @@ for (const selectionChanged of [false, true]) {
     assert.equal(auth.getSavedSessionId(), selectionChanged ? 'other:grant' : 'approved:grant')
     assert.equal(save.mock.callCount(), 1)
     assert.equal(savedRecord.free.mock.callCount(), 1)
+    assert.equal(session.signout.mock.callCount(), selectionChanged ? 1 : 0)
   })
 }
 
@@ -352,7 +377,53 @@ test('explicit cancellation rejects immediately and abandons the pending link', 
   await assert.rejects(flow.awaitApproval, { name: 'RingAuthCanceled' })
   assert.equal(sdkFlow.free.mock.callCount(), 1)
   assert.equal(pending.entries().length, 0)
-  approval.resolve({})
+  const revoke = t.mock.fn(async () => {})
+  t.mock.method(BrowserSessionStore.prototype, 'save', async () => record('late:grant'))
+  approval.resolve({ signout: revoke })
+  await new Promise(setImmediate)
+  assert.equal(revoke.mock.callCount(), 1)
+})
+
+test('a paused completed save stays tracked if its page never becomes visible again', async (t) => {
+  const stored = record('cached:grant')
+  const visibility = deferred()
+  const waiting = deferred()
+  const session = { signout: t.mock.fn(async () => {}) }
+  t.mock.method(BrowserSessionStore.prototype, 'save', async () => stored)
+  const save = auth.saveSession(
+    session,
+    () => false,
+    () => {
+      waiting.resolve()
+      return visibility.promise
+    },
+  )
+  await waiting.promise
+  assert.equal(auth.hasPendingSessionCleanup(), true)
+  const reloaded = await server.ssrLoadModule('/src/pubky.ts?cached-cleanup-reload')
+  t.mock.method(BrowserSessionStore.prototype, 'restore', async () => session)
+  assert.equal(await reloaded.restoreSavedSession(), undefined)
+  assert.equal(session.signout.mock.callCount(), 1)
+  assert.equal(auth.hasPendingSessionCleanup(), false)
+  visibility.resolve()
+  await save
+})
+
+test('a failed visibility callback also cleans up its persisted approval', async (t) => {
+  t.mock.method(BrowserSessionStore.prototype, 'save', async () => record('abandoned:grant'))
+  const session = { signout: t.mock.fn(async () => {}) }
+  await assert.rejects(
+    auth.saveSession(
+      session,
+      () => true,
+      async () => {
+        throw new Error('Visibility wait failed')
+      },
+    ),
+    /Visibility wait failed/,
+  )
+  assert.equal(session.signout.mock.callCount(), 1)
+  assert.equal(auth.hasPendingSessionCleanup(), false)
 })
 
 test('failed approval keeps resumable state; an expired flow removes it', async (t) => {
@@ -587,11 +658,174 @@ test('a save completed after invalidation cannot replace the saved pointer', asy
   const saved = record('late:grant')
   saved.free = t.mock.fn()
   t.mock.method(BrowserSessionStore.prototype, 'save', async () => saved)
-  const session = {}
+  const session = { signout: t.mock.fn(async () => {}) }
   assert.equal(await auth.saveSession(session, () => false), false)
   assert.equal(auth.getSavedSessionId(), 'other:grant')
   assert.equal(auth.getSessionId(session), 'late:grant')
   assert.equal(saved.free.mock.callCount(), 1)
+  assert.equal(session.signout.mock.callCount(), 1)
+})
+
+test('a stale save must not revoke the same grant selected by another tab', async (t) => {
+  local.setItem('template:session', 'shared:grant')
+  t.mock.method(BrowserSessionStore.prototype, 'save', async () => record('shared:grant'))
+  const session = { signout: t.mock.fn(async () => {}) }
+  assert.equal(await auth.saveSession(session, () => false), false)
+  assert.equal(auth.getSavedSessionId(), 'shared:grant')
+  assert.equal(session.signout.mock.callCount(), 0)
+  assert.equal(auth.hasPendingSessionCleanup(), false)
+})
+
+test('an approval discarded before selection is persisted and revoked', async (t) => {
+  const operations = []
+  t.mock.method(BrowserSessionStore.prototype, 'save', async () => {
+    operations.push('save')
+    return record('abandoned:grant')
+  })
+  const session = { signout: async () => operations.push('signout') }
+  await auth.discardSession(session)
+  assert.deepEqual(operations, ['save', 'signout'])
+  assert.equal(auth.getSavedSessionId(), null)
+  assert.equal(auth.hasPendingSessionCleanup(), false)
+})
+
+test('failed abandoned-grant revocation stays recoverable after reload without replacing selection', async (t) => {
+  local.setItem('template:session', 'selected:grant')
+  t.mock.method(BrowserSessionStore.prototype, 'save', async () => record('abandoned:grant'))
+  const session = {
+    signout: async () => {
+      throw new Error('Offline')
+    },
+  }
+  await assert.rejects(
+    auth.saveSession(session, () => false),
+    /Offline/,
+  )
+  assert.equal(auth.getSavedSessionId(), 'selected:grant')
+  assert.equal(auth.hasPendingSessionCleanup(), true)
+  const reloaded = await server.ssrLoadModule('/src/pubky.ts?cleanup-reload')
+  let recovered = false
+  const selected = {}
+  const restored = []
+  t.mock.method(BrowserSessionStore.prototype, 'restore', async (id) => {
+    restored.push(id)
+    if (id === 'selected:grant') return selected
+    if (!recovered) throw new Error('Still offline')
+    throw sdkError('ClientStateError', 'Browser session was signed out.')
+  })
+  const remove = t.mock.method(BrowserSessionStore.prototype, 'remove', async () => {})
+  await assert.rejects(reloaded.restoreSavedSession(), /Still offline/)
+  assert.equal(reloaded.hasPendingSessionCleanup(), true)
+  assert.equal(reloaded.getSavedSessionId(), 'selected:grant')
+  recovered = true
+  assert.equal(await reloaded.restoreSavedSession(), selected)
+  assert.equal(reloaded.hasPendingSessionCleanup(), false)
+  assert.deepEqual(restored, ['abandoned:grant', 'abandoned:grant', 'selected:grant'])
+  assert.equal(
+    remove.mock.callCount(),
+    0,
+    'Do not discard credentials needed for pending revocation',
+  )
+})
+
+test('a same-grant save queued behind revocation cannot select the revoked record', async (t) => {
+  const signingOut = deferred()
+  const signedOut = deferred()
+  const secondSaved = deferred()
+  let revoked = false
+  const abandoned = {
+    signout: async () => {
+      signingOut.resolve()
+      await signedOut.promise
+      revoked = true
+    },
+  }
+  const late = { signout: t.mock.fn(async () => {}) }
+  t.mock.method(BrowserSessionStore.prototype, 'save', async (session) => {
+    if (session === late) secondSaved.resolve()
+    return record('shared:grant')
+  })
+  t.mock.method(BrowserSessionStore.prototype, 'restore', async () => {
+    if (revoked) throw sdkError('ClientStateError', 'Browser session is no longer valid.')
+    return { free() {} }
+  })
+  const discarded = auth.discardSession(abandoned)
+  await signingOut.promise
+  const selected = auth.saveSession(late)
+  const rejected = assert.rejects(selected, /no longer valid/)
+  await secondSaved.promise
+  signedOut.resolve()
+  await discarded
+  await rejected
+  assert.equal(auth.getSavedSessionId(), null)
+  assert.equal(auth.hasPendingSessionCleanup(), false)
+})
+
+test('cleanup retry preserves an exact grant that another tab has selected', async (t) => {
+  local.setItem('template:session:pending-revocation:shared:grant', '1')
+  local.setItem('template:session', 'shared:grant')
+  const session = { signout: t.mock.fn(async () => {}) }
+  const restored = t.mock.method(BrowserSessionStore.prototype, 'restore', async () => session)
+  assert.equal(await auth.restoreSavedSession(), session)
+  assert.equal(auth.hasPendingSessionCleanup(), false)
+  assert.equal(auth.getSavedSessionId(), 'shared:grant')
+  assert.equal(session.signout.mock.callCount(), 0)
+  assert.equal(restored.mock.callCount(), 1, 'Only restore the currently selected grant')
+})
+
+test('invalidation during final SDK validation revokes the unselected grant', async (t) => {
+  const validating = deferred()
+  const validated = deferred()
+  let current = true
+  const session = { signout: t.mock.fn(async () => {}) }
+  t.mock.method(BrowserSessionStore.prototype, 'save', async () => record('abandoned:grant'))
+  const restored = { free: t.mock.fn() }
+  t.mock.method(BrowserSessionStore.prototype, 'restore', () => {
+    validating.resolve()
+    return validated.promise
+  })
+  const saving = auth.saveSession(session, () => current)
+  await validating.promise
+  current = false
+  validated.resolve(restored)
+  assert.equal(await saving, false)
+  assert.equal(session.signout.mock.callCount(), 1)
+  assert.equal(restored.free.mock.callCount(), 1)
+  assert.equal(auth.getSavedSessionId(), null)
+  assert.equal(auth.hasPendingSessionCleanup(), false)
+})
+
+test('failed final validation still retains a retry reference if revocation also fails', async (t) => {
+  const session = {
+    signout: async () => {
+      throw new Error('Signout offline')
+    },
+  }
+  t.mock.method(BrowserSessionStore.prototype, 'save', async () => record('abandoned:grant'))
+  t.mock.method(BrowserSessionStore.prototype, 'restore', async () => {
+    throw new Error('Restore offline')
+  })
+  await assert.rejects(auth.saveSession(session), /Signout offline/)
+  assert.equal(auth.getSavedSessionId(), null)
+  assert.equal(auth.hasPendingSessionCleanup(), true)
+  assert.equal(local.getItem('template:session:pending-revocation:abandoned:grant'), '1')
+})
+
+test('selection lock callbacks fulfill even when their caller must receive a cleanup error', async (t) => {
+  t.mock.method(BrowserSessionStore.prototype, 'save', async () => record('abandoned:grant'))
+  t.mock.method(globalThis.navigator.locks, 'request', async (_name, task) => {
+    const result = task()
+    await assert.doesNotReject(result, 'Firefox reports rejected lock callbacks as uncaught errors')
+    return result
+  })
+  const offline = new Error('Offline')
+  const session = {
+    signout: async () => {
+      throw offline
+    },
+  }
+  await assert.rejects(auth.discardSession(session), (error) => error === offline)
+  assert.equal(auth.hasPendingSessionCleanup(), true)
 })
 
 test('development identity creation is rejected before any SDK call when disabled', async (t) => {

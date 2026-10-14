@@ -32,8 +32,10 @@ import {
   statusMessage,
 } from './html'
 import {
+  discardSession,
   getSavedSessionId,
   getSessionId,
+  hasPendingSessionCleanup,
   subscribeSavedSessionChanges,
   isRingAuthCanceled,
   isRingAuthExpired,
@@ -184,7 +186,11 @@ async function init(drafts?: typeof suspendedDrafts) {
 
   if (state.revision !== revision || state.session) return
   mount()
-  if (!getSavedSessionId()) await refreshRingSignin(Boolean(state.error))
+  if (!needsSessionRecovery()) await refreshRingSignin(Boolean(state.error))
+}
+
+function needsSessionRecovery() {
+  return Boolean(getSavedSessionId()) || hasPendingSessionCleanup()
 }
 
 function mount() {
@@ -202,7 +208,7 @@ function mount() {
         ${session ? signedInHeader(session) : ''}
       </header>
       <div id="status">${statusHtml()}</div>
-      <div id="view">${session ? signedInViewHtml() : authViewHtml(state.ringSignin, state.busy, Boolean(getSavedSessionId()))}</div>
+      <div id="view">${session ? signedInViewHtml() : authViewHtml(state.ringSignin, state.busy, needsSessionRecovery())}</div>
       <footer class="app-footer">Built with <a href="https://www.npmjs.com/package/@synonymdev/pubky">Pubky SDK</a> v${pubkySdkVersion}</footer>
     </main>
   `
@@ -259,7 +265,7 @@ function canUseAuthorizationUrl() {
   const { authorizationUrl, expired, loading } = state.ringSignin
   return (
     !state.session &&
-    !getSavedSessionId() &&
+    !needsSessionRecovery() &&
     !state.busy &&
     Boolean(authorizationUrl) &&
     !loading &&
@@ -428,7 +434,7 @@ function handleSubmit(event: SubmitEvent) {
 }
 
 async function refreshRingSignin(preserveError = false, fresh = false) {
-  if (state.session || getSavedSessionId()) return
+  if (state.session || needsSessionRecovery()) return
   const token = Symbol('ring-signin')
   cancelRingSignin()
 
@@ -475,7 +481,10 @@ async function refreshRingSignin(preserveError = false, fresh = false) {
 async function handleRingApproval(flow: RingAuthFlow, token: symbol, attempt: RingAuthAttempt) {
   try {
     const session = await flow.awaitApproval
-    if (!(await attempt.waitUntilVisible())) return
+    if (!(await attempt.waitUntilVisible())) {
+      await discardSession(session)
+      return
+    }
 
     state.ringAuthFlow = undefined
     const revision = state.revision
@@ -529,7 +538,7 @@ async function handleCopyAuthorizationUrl() {
 }
 
 async function handleDevelopmentSignup(form: HTMLFormElement) {
-  if (state.session || getSavedSessionId()) return
+  if (state.session || needsSessionRecovery()) return
   const formData = new FormData(form)
   const homeserver = formValue(formData, 'homeserver')
 
@@ -537,7 +546,7 @@ async function handleDevelopmentSignup(form: HTMLFormElement) {
   await run('Creating identity...', async () => {
     const session = await signupDevelopmentUser(homeserver)
     const isCurrent = () => state.revision === revision && !getSavedSessionId()
-    if (!isCurrent() || !(await saveSession(session, isCurrent))) return
+    if (!(await saveSession(session, isCurrent))) return
     if (state.revision !== revision) return
     await activateSession(session, 'Identity created and signed in.')
   })

@@ -1,10 +1,11 @@
 import { resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '../..')
+const app = resolve(root, 'basic-pubky-app')
 
 // This configuration is used only by Playwright. Production builds have no fixture alias.
 export default {
-  root: resolve(root, 'basic-pubky-app'),
+  root: app,
   envDir: false,
   define: {
     'import.meta.env.VITE_PUBKY_TESTNET': JSON.stringify('true'),
@@ -22,10 +23,19 @@ export default {
       },
     ],
   },
-  server: {
+  build: {
+    outDir: resolve(root, 'node_modules/.cache/pubky-browser-preview'),
+    emptyOutDir: true,
+    rolldownOptions: {
+      input: {
+        app: resolve(app, 'index.html'),
+        reader: resolve(app, 'public-reader.html'),
+      },
+    },
+  },
+  preview: {
     host: '127.0.0.1',
     port: 4175,
     strictPort: true,
-    fs: { allow: [root] },
   },
 }

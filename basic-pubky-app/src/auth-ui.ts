@@ -17,9 +17,9 @@ export function authViewHtml(ringSignin: RingSigninState, busy?: string, restore
   if (restorePending) {
     return `
       <section class="panel">
-        <h2>Restore saved session</h2>
-        <p>Retry restoring your saved session before signing in again. Retrying also completes a pending sign-out.</p>
-        <button id="retry-saved-session" type="button" ${disabledAttr(Boolean(busy))}>Retry saved session</button>
+        <h2>Session recovery</h2>
+        <p>Retry restoring your saved session or completing a pending sign-out before signing in again.</p>
+        <button id="retry-saved-session" type="button" ${disabledAttr(Boolean(busy))}>Retry session recovery</button>
       </section>
     `
   }
