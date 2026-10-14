@@ -1008,6 +1008,8 @@ async function loadEventHistory() {
     await stopEventHistory()
     if (state.revision !== revision) return
     state.eventStreamEvents = []
+    updateEventStreamToggle(false)
+    updateEventList(state.eventStreamEvents)
     const events: AppEvent[] = []
     const stream = startAppEventHistory(session, space, (event) => {
       if (state.revision !== revision || state.session !== session || state.space !== space) return
@@ -1031,6 +1033,5 @@ async function loadEventHistory() {
     setNotice(
       `Loaded ${events.length} recent events. Start live to continue from the newest event.`,
     )
-    updateEventStreamToggle(false)
   })
 }

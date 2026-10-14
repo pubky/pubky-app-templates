@@ -25,11 +25,13 @@ class TestButton {
   }
 }
 
-// Model only the editor fields and mount boundaries; exercise the real app handlers.
+// Model the editor fields, event panel, and mount boundaries; exercise the real app handlers.
 function editorRoot() {
   const title = { value: '' }
   const body = { value: '' }
   const status = { innerHTML: '' }
+  const eventList = { innerHTML: '' }
+  const eventToggle = { textContent: 'Start live' }
   const form = {
     querySelector: (selector) => (selector.includes('title') ? title : body),
   }
@@ -39,6 +41,8 @@ function editorRoot() {
     title,
     body,
     status,
+    eventList,
+    eventToggle,
     mounts: 0,
     get innerHTML() {
       return html
@@ -55,6 +59,9 @@ function editorRoot() {
     querySelector(selector) {
       if (selector === '#status') return status
       if (selector === '#file-form') return html.includes('id="file-form"') ? form : null
+      if (selector === '#event-list') return html.includes('id="event-list"') ? eventList : null
+      if (selector === '#toggle-event-stream')
+        return html.includes('id="toggle-event-stream"') ? eventToggle : null
       return null
     },
     querySelectorAll: () => [],
@@ -114,6 +121,7 @@ async function setup(t, { restoreError } = {}) {
   t.mock.method(BrowserSessionStore.prototype, 'restore', (id) => restore(id))
   await auth.saveSession(original)
   const root = editorRoot()
+  globalThis.document.querySelector = (selector) => root.querySelector(selector)
   app.start(root)
   await until(() =>
     restoreError ? Boolean(root.status.innerHTML) : root.innerHTML.includes('id="file-form"'),
@@ -137,6 +145,78 @@ async function setup(t, { restoreError } = {}) {
     hide: () => emit('pagehide', { persisted: true }),
     show: () => emit('pageshow', { persisted: true }),
   }
+}
+
+for (const historyFails of [false, true]) {
+  test(`${historyFails ? 'failed' : 'empty'} event history clears live rows and restores the start control`, async (t) => {
+    const { auth, root, original } = await setup(t)
+    const owner = 'event-owner'
+    original.info.publicKey = { z32: () => owner, toString: () => owner }
+    let liveController
+    let liveCanceled = false
+    let finishHistory
+    const subscriptions = []
+    t.mock.method(auth.pubky, 'eventStreamForUser', () => {
+      const options = {}
+      const builder = {}
+      for (const option of ['path', 'maxEventBytes', 'session', 'reverse', 'limit', 'live']) {
+        builder[option] = (value = true) => {
+          options[option] = value
+          return builder
+        }
+      }
+      builder.subscribe = async () => {
+        subscriptions.push(options)
+        if (options.live) {
+          return new globalThis.ReadableStream({
+            start(controller) {
+              liveController = controller
+            },
+            cancel() {
+              liveCanceled = true
+            },
+          })
+        }
+        if (subscriptions.length > 1) {
+          await new Promise((resolve, reject) => {
+            finishHistory = () =>
+              historyFails ? reject(new Error('History unavailable')) : resolve()
+          })
+        }
+        return new globalThis.ReadableStream({ start: (controller) => controller.close() })
+      }
+      return builder
+    })
+
+    root.click('toggle-event-stream')
+    await until(() => liveController && root.eventToggle.textContent === 'Stop live')
+    liveController.enqueue({
+      cursor: '1',
+      eventType: 'PUT',
+      resource: {
+        path: '/pub/template/files/live.json',
+        owner: { z32: () => owner, free() {} },
+        free() {},
+      },
+      free() {},
+    })
+    await until(() => root.eventList.innerHTML.includes('live.json'))
+
+    root.click('load-event-history')
+    await until(() => finishHistory)
+    assert.equal(liveCanceled, true)
+    assert.equal(root.eventToggle.textContent, 'Start live')
+    assert.ok(root.eventList.innerHTML.includes('No events yet.'))
+    assert.ok(!root.eventList.innerHTML.includes('live.json'))
+    finishHistory()
+    await until(() =>
+      root.status.innerHTML.includes(
+        historyFails ? 'History unavailable' : 'Loaded 0 recent events',
+      ),
+    )
+    assert.equal(root.eventToggle.textContent, 'Start live')
+    assert.ok(root.eventList.innerHTML.includes('No events yet.'))
+  })
 }
 
 test('a failed saved-session restore offers retry without starting replacement authentication', async (t) => {

@@ -605,6 +605,55 @@ test('event history, live restart, storage switching, and signout keep the corre
   ).toHaveLength(0)
 })
 
+for (const historyFails of [false, true]) {
+  test(`${historyFails ? 'failed' : 'empty'} event history clears live events and restores the start control`, async ({
+    page,
+  }) => {
+    await openApp(page)
+    await page.getByRole('button', { name: 'Start live', exact: true }).click()
+    await expect
+      .poll(() => page.evaluate(() => globalThis.__pubkyTest.subscriptions.at(-1)?.options.live))
+      .toBe(true)
+    await page.evaluate(() =>
+      globalThis.__pubkyTest.emitEvent({ cursor: '1', path: '/pub/template/files/live.json' }),
+    )
+    await expect(page.locator('#event-list li')).toContainText('live.json')
+    await expect(page.getByRole('button', { name: 'Stop live', exact: true })).toBeEnabled()
+
+    if (historyFails) await failNext(page, 'events.subscribe')
+    await page.getByRole('button', { name: 'Recent history', exact: true }).click()
+    await expect(page.locator('#status')).toContainText(
+      historyFails ? 'Simulated unavailable service' : 'Loaded 0 recent events',
+    )
+    await expect(page.locator('#event-list li')).toHaveCount(0)
+    await expect(page.locator('#event-list')).toHaveText('No events yet.')
+    await expect(page.getByRole('button', { name: 'Start live', exact: true })).toBeEnabled()
+    expect(
+      await page.evaluate(() =>
+        globalThis.__pubkyTest.subscriptions.filter((sub) => sub.options.live && !sub.canceled),
+      ),
+    ).toHaveLength(0)
+
+    if (historyFails) {
+      await page.getByRole('button', { name: 'Recent history', exact: true }).click()
+      await expect(page.locator('#status')).toContainText('Loaded 0 recent events')
+    }
+    await page.getByRole('button', { name: 'Start live', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Stop live', exact: true })).toBeEnabled()
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          globalThis.__pubkyTest.subscriptions.some((sub) => sub.options.live && !sub.canceled),
+        ),
+      )
+      .toBe(true)
+    await page.evaluate(() =>
+      globalThis.__pubkyTest.emitEvent({ cursor: '2', path: '/pub/template/files/restarted.json' }),
+    )
+    await expect(page.locator('#event-list li')).toContainText('restarted.json')
+  })
+}
+
 test('event subscription and invalid event errors restore controls and allow retry', async ({
   page,
 }) => {
