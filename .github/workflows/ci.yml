@@ -76,5 +76,56 @@ jobs:
         working-directory: ${{ matrix.template }}
 
       - name: Build
+        if: matrix.template == 'vite-starter'
         run: npm run build
         working-directory: ${{ matrix.template }}
+
+      - name: Build testnet and mainnet demos
+        if: matrix.template == 'basic-pubky-app'
+        run: |
+          VITE_PUBKY_TESTNET=true VITE_PUBKY_STORAGE_NAMESPACE=testnet npm run build -- --base ./ --outDir dist/testnet
+          VITE_PUBKY_TESTNET=false npm run build -- --base ./ --outDir dist/mainnet
+        working-directory: basic-pubky-app
+
+  browser:
+    name: Browser regressions
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            basic-pubky-app/package-lock.json
+
+      - name: Install repository dependencies
+        run: npm ci
+
+      - name: Install template dependencies
+        run: npm ci
+        working-directory: basic-pubky-app
+
+      - name: Install browsers
+        run: npx playwright install --with-deps chromium firefox
+
+      - name: Test in Chromium and Firefox
+        run: npm run test:browser
+
+      - name: Upload failure report and traces
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-failures
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+          if-no-files-found: ignore
