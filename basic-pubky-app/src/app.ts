@@ -124,7 +124,7 @@ export function start(root: HTMLElement) {
     resetWorkspace()
     setNotice(
       change.type === 'invalidated'
-        ? 'This session was signed out or removed in another tab.'
+        ? 'This session was signed out or removed.'
         : 'Session changed in another tab.',
     )
     mount()

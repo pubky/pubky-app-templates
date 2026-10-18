@@ -147,12 +147,16 @@ function sessionStateError(message) {
   return error
 }
 function removeRecord(id) {
+  if (!savedIds().includes(id)) return
   globalThis.localStorage.setItem(
     'test-sdk-records',
     JSON.stringify(savedIds().filter((item) => item !== id)),
   )
   globalThis.localStorage.removeItem(pendingLogoutKey(id))
   globalThis.localStorage.removeItem(recoveredLogoutKey(id))
+  globalThis.dispatchEvent(
+    new globalThis.CustomEvent('pubky-session-changed', { detail: { id, action: 'removed' } }),
+  )
 }
 function sessionFor(id = accountId) {
   return {
@@ -164,9 +168,6 @@ function sessionFor(id = accountId) {
       globalThis.localStorage.setItem(pendingLogoutKey(id), 'true')
       call('signout', id)
       removeRecord(id)
-      globalThis.dispatchEvent(
-        new globalThis.CustomEvent('pubky-session-changed', { detail: { id, action: 'removed' } }),
-      )
     },
   }
 }
@@ -198,7 +199,7 @@ const client = {
         const recovered = globalThis.localStorage.getItem(recoveredLogoutKey(id))
         if (recovered) removeRecord(id)
         throw sessionStateError(
-          recovered ? 'Browser session is no longer valid.' : 'Browser session logout is pending.',
+          recovered ? 'Browser session was signed out.' : 'Browser session logout is pending.',
         )
       }
       return sessionFor(id)

@@ -363,6 +363,12 @@ test('pending signout survives reload and must finish revocation before another 
   await expect(page.getByRole('button', { name: 'Retry sign out', exact: true })).toBeEnabled()
   await page.reload()
   await expect(page.locator('#retry-saved-session')).toBeEnabled()
+  await page.evaluate(() => {
+    globalThis.__observedSessionChanges = []
+    globalThis.addEventListener('pubky-session-changed', (event) =>
+      globalThis.__observedSessionChanges.push(event.detail),
+    )
+  })
   await expect(page.locator('#authorize-ring, #development-signup-form, #file-form')).toHaveCount(0)
   expect(await calls(page, 'startGrantAuthFlow')).toHaveLength(0)
   expect(await calls(page, 'sessions.save')).toHaveLength(0)
@@ -374,12 +380,19 @@ test('pending signout survives reload and must finish revocation before another 
   await expect(page.locator('#retry-saved-session')).toBeEnabled()
   expect(await calls(page, 'sessions.restore')).toHaveLength(2)
   expect(await calls(page, 'startGrantAuthFlow')).toHaveLength(0)
+  expect(await page.evaluate(() => globalThis.__observedSessionChanges)).toEqual([])
   await page.evaluate(() =>
     globalThis.localStorage.setItem('test-sdk-recovered-logout:browser-test:template', 'true'),
   )
   await page.locator('#retry-saved-session').click()
-  await expect(page.locator('#authorize-ring')).toBeVisible()
+  await expect(page.locator('#authorize-ring')).toBeEnabled()
+  await expect(page.locator('#refresh-ring-signin')).toBeEnabled()
+  await expect(page.locator('#status')).toHaveText('This session was signed out or removed.')
+  await expect(page.locator('#retry-saved-session, #file-form')).toHaveCount(0)
   expect(await page.evaluate(() => globalThis.localStorage.getItem('template:session'))).toBeNull()
+  expect(await page.evaluate(() => globalThis.__observedSessionChanges)).toEqual([
+    { id: 'browser-test:template', action: 'removed' },
+  ])
   expect(await calls(page, 'sessions.remove')).toHaveLength(1)
   expect(await calls(page, 'startGrantAuthFlow')).toHaveLength(1)
 })
