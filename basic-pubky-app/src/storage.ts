@@ -316,6 +316,8 @@ function isNotFound(error: unknown) {
 }
 
 function statusCode(error: unknown) {
+  // A refresh endpoint's status must never be mistaken for a storage response.
+  if (isRecord(error) && error.name === 'CredentialRefreshError') return undefined
   return isRecord(error) && isRecord(error.data) && typeof error.data.statusCode === 'number'
     ? error.data.statusCode
     : undefined

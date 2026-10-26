@@ -12,11 +12,18 @@ const upload = { bytes: [0, 128, 255], metadata: { contentLength: 3 } }
 
 async function openApp(
   page,
-  { signedIn = true, files = {}, directories = [], failures = {}, persistentFailures = {} } = {},
+  {
+    signedIn = true,
+    files = {},
+    directories = [],
+    failures = {},
+    persistentFailures = {},
+    capabilities,
+  } = {},
 ) {
   await page.addInitScript(
-    ({ signedIn, files, directories, failures, persistentFailures }) => {
-      globalThis.__pubkySeed = { files, directories, failures, persistentFailures }
+    ({ signedIn, files, directories, failures, persistentFailures, capabilities }) => {
+      globalThis.__pubkySeed = { files, directories, failures, persistentFailures, capabilities }
       if (!globalThis.sessionStorage.getItem('test-initialized')) {
         globalThis.sessionStorage.setItem('test-initialized', 'true')
         if (signedIn) {
@@ -28,7 +35,7 @@ async function openApp(
         }
       }
     },
-    { signedIn, files, directories, failures, persistentFailures },
+    { signedIn, files, directories, failures, persistentFailures, capabilities },
   )
   await page.goto('/')
   await expect(page.locator(signedIn ? '#file-form' : '#authorize-ring')).toBeVisible()
@@ -557,13 +564,13 @@ for (const failWrite of [true, false]) {
   }) => {
     await openApp(page)
     await page.getByLabel('Choose a file', { exact: true }).check()
-    const input = page.locator('input[type="file"]')
+    const input = page.locator('#file-form input[type="file"]')
     await input.setInputFiles({
       name: 'upload.bin',
       mimeType: 'application/octet-stream',
       buffer: Buffer.from([0, 128, 255]),
     })
-    await failNext(page, failWrite ? 'putBytes' : 'list:/pub/template/attachments/')
+    await failNext(page, failWrite ? 'putBlob' : 'list:/pub/template/attachments/')
     await submit(page).click()
     await expect(submit(page)).toBeEnabled()
     if (failWrite) {
@@ -576,7 +583,7 @@ for (const failWrite of [true, false]) {
     expect(await input.evaluate((input) => input.files.length)).toBe(0)
     await expect(page.locator('#files-list')).toContainText('upload.bin')
     await submit(page).click()
-    expect(await calls(page, 'putBytes')).toHaveLength(failWrite ? 2 : 1)
+    expect(await calls(page, 'putBlob')).toHaveLength(failWrite ? 2 : 1)
   })
 }
 
@@ -955,4 +962,144 @@ test('removing the optional events panel leaves file operations usable', async (
   await expect(page.locator('#status')).toContainText('File saved:')
   await expect(page.locator('#files-list')).toContainText('A new note')
   await expect(submit(page)).toBeEnabled()
+})
+
+async function downloadedBytes(download) {
+  const chunks = []
+  for await (const chunk of await download.createReadStream()) chunks.push(chunk)
+  return Buffer.concat(chunks)
+}
+
+test('encrypted uploads decrypt normally and recover a ciphertext download locally', async ({
+  page,
+}) => {
+  await openApp(page)
+  await page.getByRole('button', { name: 'Private storage', exact: true }).click()
+  await page.getByLabel('Choose a file', { exact: true }).check()
+  const plaintext = Buffer.from([0, 128, 255, 10])
+  await page.locator('#file-form input[type="file"]').setInputFiles({
+    name: 'private.bin',
+    mimeType: 'application/octet-stream',
+    buffer: plaintext,
+  })
+  await page.getByLabel('Encrypt this upload').check()
+  await submit(page).click()
+  await expect(page.locator('#status')).toContainText('File uploaded:')
+  const row = page.locator('#files-list li').filter({ hasText: 'private.bin.pubkyenc' })
+  await expect(row).toContainText('Encrypted file')
+  const writes = await calls(page, 'putBytes')
+  expect(writes).toHaveLength(1)
+  expect(await calls(page, 'putBlob')).toHaveLength(0)
+  const encrypted = await page.evaluate(
+    (path) => globalThis.__pubkyTest.files[path].bytes,
+    writes[0].path,
+  )
+  expect(encrypted).toHaveLength(plaintext.length + 36)
+  expect(encrypted).not.toEqual([...plaintext])
+
+  const normalDownload = page.waitForEvent('download')
+  await row.getByRole('button', { name: 'Decrypt & download', exact: true }).click()
+  expect(await downloadedBytes(await normalDownload)).toEqual(plaintext)
+
+  const rawDownload = page.waitForEvent('download')
+  await row.getByRole('button', { name: 'Download ciphertext', exact: true }).click()
+  const ciphertext = await rawDownload
+  const raw = await downloadedBytes(ciphertext)
+  expect([...raw]).toEqual(encrypted)
+  await expect(page.locator('#status')).toContainText('File downloaded.')
+  const before = await page.evaluate(() => globalThis.__pubkyTest.calls.length)
+  await page.locator('#encryption-recovery input').setInputFiles({
+    name: ciphertext.suggestedFilename(),
+    mimeType: 'application/octet-stream',
+    buffer: raw,
+  })
+  const recoveredDownload = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Decrypt with saved keys', exact: true }).click()
+  expect(await downloadedBytes(await recoveredDownload)).toEqual(plaintext)
+  await expect(page.locator('#encryption-recovery [role="status"]')).toContainText(
+    'Decrypted locally',
+  )
+  expect(
+    await page.evaluate((before) => globalThis.__pubkyTest.calls.slice(before), before),
+  ).toEqual([{ method: 'sessions.restoreEncryptionKeys', path: 'browser-test:template' }])
+})
+
+test('declining encryption retains the upload and allows an explicit unencrypted upload', async ({
+  page,
+}) => {
+  await openApp(page)
+  await page.evaluate(() => (globalThis.__pubkyTest.declineEncryption = true))
+  await page.getByRole('button', { name: 'Private storage', exact: true }).click()
+  await page.getByLabel('Choose a file', { exact: true }).check()
+  const input = page.locator('#file-form input[type="file"]')
+  await input.setInputFiles({
+    name: 'file.bin',
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.from('private'),
+  })
+  await page.getByLabel('Encrypt this upload').check()
+  await submit(page).click()
+  await expect(page.locator('#status')).toContainText('No encryption keys were approved')
+  expect(await calls(page, 'putBytes')).toHaveLength(0)
+  expect(await calls(page, 'putBlob')).toHaveLength(0)
+  expect(await input.evaluate((input) => input.files.length)).toBe(1)
+  await page.getByLabel('Encrypt this upload').uncheck()
+  await submit(page).click()
+  await expect(page.locator('#status')).toContainText('File uploaded:')
+  expect(await calls(page, 'putBlob')).toHaveLength(1)
+})
+
+test('read-only private approval loads files and history while disabling mutations', async ({
+  page,
+}) => {
+  await openApp(page, {
+    capabilities: ['/priv/template/:r'],
+    files: { '/priv/template/attachments/readable.bin': upload },
+  })
+  await expect(page.getByRole('button', { name: 'Private storage', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  await expect(page.getByText('Read-only access to this folder.', { exact: false })).toBeVisible()
+  const row = page.locator('#files-list li')
+  await expect(row.getByRole('button', { name: 'Download', exact: true })).toBeEnabled()
+  await expect(row.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled()
+  await expect(submit(page)).toBeDisabled()
+  await page.getByRole('button', { name: 'Recent history', exact: true }).click()
+  await expect(page.locator('#status')).toContainText('Loaded 0 recent events')
+  await expect(page.getByRole('button', { name: 'Sign and verify', exact: true })).toBeEnabled()
+})
+
+test('cross-tab invalidation during key derivation prevents the encrypted write', async ({
+  page,
+}) => {
+  await openApp(page)
+  await page.evaluate(() => (globalThis.__pubkyTest.holdDerivations = true))
+  await page.getByRole('button', { name: 'Private storage', exact: true }).click()
+  await page.getByLabel('Choose a file', { exact: true }).check()
+  await page.locator('#file-form input[type="file"]').setInputFiles({
+    name: 'private.bin',
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.from('secret'),
+  })
+  await page.getByLabel('Encrypt this upload').check()
+  await submit(page).click()
+  await expect
+    .poll(() => page.evaluate(() => typeof globalThis.__pubkyTest.releaseDerivation))
+    .toBe('function')
+  await page.evaluate(() => {
+    globalThis.localStorage.removeItem('template:session')
+    globalThis.dispatchEvent(
+      new globalThis.StorageEvent('storage', {
+        key: 'template:session',
+        storageArea: globalThis.localStorage,
+      }),
+    )
+    globalThis.__pubkyTest.holdDerivations = false
+    globalThis.__pubkyTest.releaseDerivation()
+  })
+  await expect(page.locator('#authorize-ring')).toBeVisible()
+  expect(await calls(page, 'putBytes')).toHaveLength(0)
+  await expect(page.locator('#encryption-recovery')).toHaveCount(0)
+  await expect(page.locator('#proof-tools')).toHaveCount(0)
 })

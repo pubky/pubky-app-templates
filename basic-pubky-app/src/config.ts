@@ -1,3 +1,4 @@
+import { validateCapabilities } from '@synonymdev/pubky'
 import type { Capabilities } from '@synonymdev/pubky'
 
 export const APP_CLIENT_ID = 'template' as const
@@ -6,7 +7,9 @@ export const APP_PATHS = {
   public: `/pub/${APP_CLIENT_ID}/`,
   private: `/priv/${APP_CLIENT_ID}/`,
 } as const
-export const APP_CAPABILITIES = `${APP_PATHS.public}:rw,${APP_PATHS.private}:rw` as Capabilities
+export const APP_CAPABILITIES = validateCapabilities(
+  `${APP_PATHS.public}:rw,${APP_PATHS.private}:rw,${APP_PATHS.private}attachments/:e`,
+) as Capabilities
 
 // Events contain resource metadata, not file contents. Bound incoming SSE payloads.
 export const MAX_EVENT_BYTES = 8 * 1024

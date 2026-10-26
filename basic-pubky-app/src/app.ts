@@ -22,6 +22,9 @@ import { eventStreamPanelHtml, updateEventList, updateEventStreamToggle } from '
 import { editorPanelHtml, filesPanelHtml, updateEditor, updateFilesList } from './files-ui'
 import { captureFileDraft, reconcileFileDraft, type FileDraft } from './file-drafts'
 import { storageSpacesHtml } from './spaces-ui'
+import { downloadedUploadName } from './encryption'
+import { encryptionRecoveryPanelHtml, createEncryptionRecovery } from './encryption-recovery-ui'
+import { proofPanelHtml, createProofTools } from './proofs-ui'
 import { createRingAuthAttempt, type RingAuthAttempt } from './ring-auth-lifecycle'
 import {
   copyTextToClipboard,
@@ -108,6 +111,7 @@ let app: HTMLElement
 let activeOperation: symbol | undefined
 let ringAttempt: RingAuthAttempt | undefined
 let pageSuspended = false
+let sessionTools: Array<{ dispose: () => void }> = []
 let suspendedDrafts: { sessionId: string; space: StorageSpace; drafts: State['drafts'] } | undefined
 
 export function start(root: HTMLElement) {
@@ -146,6 +150,7 @@ export function start(root: HTMLElement) {
   })
   window.addEventListener('pagehide', (event) => {
     pageSuspended = true
+    disposeSessionTools()
     captureDraft()
     const sessionId =
       state.session && !state.logoutPending ? getSessionId(state.session) : undefined
@@ -194,6 +199,7 @@ function needsSessionRecovery() {
 }
 
 function mount() {
+  disposeSessionTools()
   const session = state.session
 
   app.innerHTML = `
@@ -215,6 +221,7 @@ function mount() {
 
   void renderRingSigninQr(state.ringSignin)
   syncControls()
+  mountSessionTools()
 }
 
 function signedInHeader(session: Session) {
@@ -231,18 +238,43 @@ function signedInViewHtml() {
     return '<p>Sign-out is pending. Retry to finish revoking this session before making more requests.</p>'
   return `
     ${storageSpacesHtml(state.space, state.busy)}
-    <section class="grid">
+    ${state.session && hasStorageAccess(state.session, state.space, 'r') && !hasStorageAccess(state.session, state.space) ? '<p class="muted">Read-only access to this folder. Sign out and authorize write access to edit files.</p>' : ''}
+    <section id="storage-workspace" class="grid">
       ${editorPanelHtml(state.files, state.editingId, state.space, state.busy, state.drafts[state.space], state.fileLock)}
       ${filesPanelHtml(state.files, state.space, state.busy, state.uploads)}
       ${eventStreamPanelHtml(state.eventStreamEvents, Boolean(state.stopEventStream), state.space, state.busy)}
+    </section>
+    <section class="grid">
+      ${proofPanelHtml()}
+      ${encryptionRecoveryPanelHtml()}
     </section>
   `
 }
 
 function renderWorkspace() {
+  disposeSessionTools()
   const view = app.querySelector('#view')
   if (view) view.innerHTML = signedInViewHtml()
   syncControls()
+  mountSessionTools()
+}
+
+function disposeSessionTools() {
+  sessionTools.forEach((tools) => tools.dispose())
+  sessionTools = []
+}
+
+function mountSessionTools() {
+  if (!state.session || state.logoutPending || pageSuspended) return
+  const proofRoot = app.querySelector<HTMLElement>('#proof-tools')
+  if (proofRoot) sessionTools.push(createProofTools(proofRoot, state.session))
+  const recoveryRoot = app.querySelector<HTMLElement>('#encryption-recovery')
+  const id = getSessionId(state.session)
+  if (recoveryRoot && id) {
+    sessionTools.push(
+      createEncryptionRecovery(recoveryRoot, id, state.session.info.publicKey.z32()),
+    )
+  }
 }
 
 function statusHtml() {
@@ -278,11 +310,13 @@ function syncControls() {
   const loading = Boolean(state.ringSignin.loading)
   const canUse = canUseAuthorizationUrl()
   const canAccess = !state.session || hasStorageAccess(state.session, state.space)
+  const canRead = !state.session || hasStorageAccess(state.session, state.space, 'r')
   const writeMode = app.querySelector<HTMLInputElement>(
     '#file-form input[name="write-mode"]:checked',
   )?.value
 
   for (const button of app.querySelectorAll('button')) {
+    if (button.closest('#proof-tools, #encryption-recovery')) continue
     if (button.type === 'submit' && button.closest('#file-form')) {
       button.disabled =
         busy ||
@@ -299,7 +333,14 @@ function syncControls() {
         button.disabled = !canUse
         break
       default:
-        button.disabled = busy || (!canAccess && Boolean(button.closest('.grid')))
+        if (button.closest('#storage-workspace')) {
+          const writes =
+            button.dataset.editId ||
+            button.dataset.deleteId ||
+            button.dataset.uploadAction === 'delete' ||
+            ['renew-file-lock', 'release-file-lock', 'new-file'].includes(button.id)
+          button.disabled = busy || (writes ? !canAccess : !canRead)
+        } else button.disabled = busy
         break
     }
   }
@@ -620,13 +661,15 @@ async function handleUploadFile(form: HTMLFormElement) {
   const session = requireSession()
   const space = state.space
   const revision = state.revision
-  const file = new FormData(form).get('file')
+  const formData = new FormData(form)
+  const file = formData.get('file')
+  const encrypt = formData.get('encrypt-file') === 'on'
   if (!(file instanceof File) || !file.name) return
   const isCurrent = () =>
     state.revision === revision && state.session === session && state.space === space
 
   await run('Uploading file...', async () => {
-    const name = await uploadFileBytes(session, space, file, isCurrent)
+    const name = await uploadFileBytes(session, space, file, isCurrent, encrypt)
     if (!isCurrent()) return
     const fileInput = form.querySelector<HTMLInputElement>('input[name="file"]')
     if (fileInput) fileInput.value = ''
@@ -644,11 +687,12 @@ async function handleUploadedFileAction(name: string, action: string) {
     state.revision === revision && state.session === session && state.space === space
 
   await run('Working with file...', async () => {
-    requireStorageAccess(session, space)
-    if (action === 'download') {
-      const bytes = await readUploadedFile(session, space, name, isCurrent)
+    requireStorageAccess(session, space, action === 'delete' ? 'rw' : 'r')
+    if (action === 'download' || action === 'download-encrypted') {
+      const decrypt = action === 'download'
+      const bytes = await readUploadedFile(session, space, name, isCurrent, decrypt)
       if (!isCurrent()) return
-      downloadBytes(bytes, name)
+      downloadBytes(bytes, decrypt ? downloadedUploadName(space, name) : name)
       setNotice('File downloaded.')
     } else if (action === 'delete') {
       await deleteUploadedFile(session, space, name)
@@ -707,7 +751,7 @@ async function connectEventStream() {
   const session = requireSession()
   const space = state.space
   const revision = state.revision
-  requireStorageAccess(session, space)
+  requireStorageAccess(session, space, 'r')
   const eventStream = startAppEventStream(
     session,
     space,
@@ -803,7 +847,7 @@ async function refreshFiles() {
   const session = state.session
   if (!session) return
 
-  requireStorageAccess(session, state.space)
+  requireStorageAccess(session, state.space, 'r')
   const space = state.space
   const revision = state.revision
   const isCurrent = () =>
@@ -838,14 +882,16 @@ async function activateSession(session: Session, notice: string, drafts?: typeof
   cancelRingSignin()
   state.ringSignin = {}
   state.session = session
-  state.space = drafts?.space ?? 'public'
+  state.space = drafts?.space ?? (hasStorageAccess(session, 'public', 'r') ? 'public' : 'private')
   state.drafts = drafts?.drafts ?? {}
   state.files = []
   state.uploads = []
   state.editingId = state.drafts[state.space]?.editingId
   state.logoutPending = false
   setNotice(notice)
-  await refreshFiles()
+  // A signer may approve only part of the requested capabilities, including no storage.
+  if (hasStorageAccess(session, state.space, 'r')) await refreshFiles()
+  else setNotice(`${notice} No folder has read access; authorize again to use storage.`)
 }
 
 function cancelRingSignin() {
@@ -910,6 +956,7 @@ function requireSession() {
 }
 
 function resetWorkspace() {
+  disposeSessionTools()
   state.revision += 1
   activeOperation = undefined
   state.busy = undefined
@@ -1014,6 +1061,7 @@ async function loadEventHistory() {
   const space = state.space
   const revision = state.revision
   await run('Loading recent events...', async () => {
+    requireStorageAccess(session, space, 'r')
     await stopEventStream()
     await stopEventHistory()
     if (state.revision !== revision) return

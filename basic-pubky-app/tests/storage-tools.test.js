@@ -42,6 +42,8 @@ function sessionFor(urls = []) {
         return { contentLength: 3 }
       },
       putBytes: async (path, bytes) => calls.puts.push({ path, bytes }),
+      putBlob: async (path, blob) =>
+        calls.puts.push({ path, bytes: new Uint8Array(await blob.arrayBuffer()), blob }),
       get: async (path) => {
         calls.gets.push(path)
         return new globalThis.Response(new Uint8Array([0, 128, 255]))
@@ -312,13 +314,10 @@ test('oversized uploads and view changes cannot initiate a write', async () => {
 test('binary operations respect session capabilities', async () => {
   const { session, calls } = sessionFor()
   session.info.capabilities = ['/pub/template/:rw']
-  await assert.rejects(
-    data.listUploadedFiles(session, 'private'),
-    /does not have read and write access/,
-  )
+  await assert.rejects(data.listUploadedFiles(session, 'private'), /does not have read access/)
   await assert.rejects(
     data.readUploadedFile(session, 'private', 'file.bin'),
-    /does not have read and write access/,
+    /does not have read access/,
   )
   await assert.rejects(
     data.deleteUploadedFile(session, 'private', 'file.bin'),
@@ -337,6 +336,18 @@ test('binary operations respect session capabilities', async () => {
   assert.deepEqual(calls.metadata, [])
   assert.deepEqual(calls.deletes, [])
   assert.deepEqual(calls.puts, [])
+})
+
+test('a refresh 404 is not an empty attachment directory', async () => {
+  const { session } = sessionFor()
+  const refresh = Object.assign(new Error('Refresh endpoint unavailable'), {
+    name: 'CredentialRefreshError',
+    data: { statusCode: 404 },
+  })
+  session.storage.list = async () => {
+    throw refresh
+  }
+  await assert.rejects(data.listUploadedFiles(session, 'private'), (error) => error === refresh)
 })
 
 test('anonymous public reads never request a session and preserve binary content', async () => {

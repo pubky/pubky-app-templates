@@ -2,9 +2,12 @@
 export * from 'pubky-test-real'
 import { PublicKey } from 'pubky-test-real'
 
-const publicKey = PublicKey.from('pubky8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo')
+const publicKey = PublicKey.from(
+  globalThis.__pubkySeed?.publicKey ?? 'pubky8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo',
+)
 const accountId = 'browser-test:template'
 const state = (globalThis.__pubkyTest = {
+  capabilities: globalThis.__pubkySeed?.capabilities,
   files: globalThis.__pubkySeed?.files ?? {},
   directories: globalThis.__pubkySeed?.directories ?? [],
   failures: globalThis.__pubkySeed?.failures ?? {},
@@ -18,6 +21,24 @@ const state = (globalThis.__pubkyTest = {
   streamBytes: 0,
   publicFile: { body: 'A public file', metadata: { contentType: 'text/plain' } },
 })
+
+// Disposable non-extractable test key; production builds never import this fixture.
+let contentKey
+function encryptionKeys() {
+  return {
+    scopes: ['/priv/template/attachments/'],
+    async deriveCryptoKeyForPath(path) {
+      if (!path.startsWith('/priv/template/attachments/')) throw new Error('Outside test scope')
+      if (state.holdDerivations) await new Promise((resolve) => (state.releaseDerivation = resolve))
+      contentKey ??= globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+        'encrypt',
+        'decrypt',
+      ])
+      return contentKey
+    },
+    free() {},
+  }
+}
 
 function call(method, path) {
   state.calls.push({ method, path })
@@ -101,6 +122,11 @@ const storage = {
     call('putBytes', path)
     state.files[path] = { bytes: [...bytes], metadata: { contentLength: bytes.byteLength } }
   },
+  async putBlob(path, blob) {
+    call('putBlob', path)
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    state.files[path] = { bytes: [...bytes], metadata: { contentLength: bytes.byteLength } }
+  },
   async delete(path) {
     call('delete', path)
     delete state.files[path]
@@ -162,7 +188,32 @@ function sessionFor(id = accountId) {
   return {
     fixtureId: id,
     free() {},
-    info: { publicKey, capabilities: ['/pub/template/:rw', '/priv/template/:rw'] },
+    info: {
+      publicKey,
+      capabilities: state.capabilities ?? ['/pub/template/:rw', '/priv/template/:rw'],
+    },
+    get grant() {
+      return {
+        free() {},
+        async createCustomPop(data) {
+          call('grant.createCustomPop')
+          // The test route signs with disposable Node-held keys. Real SDK verification
+          // remains in the app; no signing secret is sent into the browser fixture.
+          const response = await globalThis.fetch('/__test_custom_pop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+          })
+          if (!response.ok) throw new Error('Test proof signing failed')
+          const credentials = await response.json()
+          call('grant.customPopCompleted')
+          return credentials
+        },
+        get encryptionKeys() {
+          return state.declineEncryption ? undefined : encryptionKeys()
+        },
+      }
+    },
     storage,
     async signout() {
       globalThis.localStorage.setItem(pendingLogoutKey(id), 'true')
@@ -188,6 +239,11 @@ const authFlow = () => ({
 })
 const client = {
   browserSessionStore: {
+    async restoreEncryptionKeys(id) {
+      call('sessions.restoreEncryptionKeys', id)
+      if (!savedIds().includes(id)) throw sessionStateError('Saved encryption record missing')
+      return encryptionKeys()
+    },
     async list() {
       call('sessions.list')
       return savedIds().map(record)

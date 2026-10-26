@@ -538,3 +538,28 @@ test('deleting with an editor lock leaves its cleanup to the caller', async () =
   assert.equal(calls.unlocks.length, 1)
   assert.equal(calls.freed.length, 1)
 })
+
+test('credential refresh failures are not classified as absent files or lost locks', async () => {
+  const refreshError = (statusCode) =>
+    Object.assign(new Error('Refresh failed'), {
+      name: 'CredentialRefreshError',
+      data: { statusCode },
+    })
+  const missing = refreshError(404)
+  const session = {
+    storage: {
+      list: async () => {
+        throw missing
+      },
+    },
+  }
+  await assert.rejects(storage.listFiles(session, 'private'), (error) => error === missing)
+  const lost = refreshError(412)
+  session.storage.lock = async () => {
+    throw lost
+  }
+  await assert.rejects(
+    storage.acquireFileLock(session, 'private', 'file'),
+    (error) => error === lost,
+  )
+})
