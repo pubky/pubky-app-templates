@@ -57,7 +57,7 @@ test('Back discards cached private content after another tab signs out', async (
   await expect(page.locator('body')).not.toContainText('Private cached draft')
 })
 
-test('a cached sign-in request resumes and a cached public reader remains usable', async ({
+test('a cached sign-in request resumes and the public reader remains usable after Forward', async ({
   page,
 }) => {
   await openApp(page, false)
@@ -67,15 +67,25 @@ test('a cached sign-in request resumes and a cached public reader remains usable
   await page.getByLabel('Pubky file address').fill(address)
   await page.getByRole('button', { name: 'Read public file', exact: true }).click()
   await expect(page.locator('.file-preview')).toHaveText('A public file')
+  // Only the reader's next pageshow should identify the Forward navigation outcome.
+  await page.evaluate(() => {
+    globalThis.__pageShows = []
+  })
   await page.goBack({ waitUntil: 'commit' })
   await expectCachedRestore(page)
   await expect(page.locator('#authorize-ring')).toBeVisible()
   await page.evaluate(() => globalThis.__pubkyTest.approveSignIn())
   await expect(page.locator('#sign-out')).toBeEnabled()
   await page.goForward({ waitUntil: 'commit' })
-  await expectCachedRestore(page)
-  await expect(page.locator('.file-preview')).toHaveText('A public file')
+  await expect.poll(() => page.evaluate(() => typeof globalThis.__pageShows.at(-1))).toBe('boolean')
+  if (await page.evaluate(() => globalThis.__pageShows.at(-1))) {
+    await expect(page.locator('.file-preview')).toHaveText('A public file')
+  } else {
+    // Chromium may evict the reader while sign-in completes. A reload is valid too.
+    await page.getByLabel('Pubky file address').fill(address)
+  }
   await page.getByRole('button', { name: 'Read public file', exact: true }).click()
+  await expect(page.locator('.file-preview')).toHaveText('A public file')
   await expect(page.locator('#storage-tools-status')).toHaveText(
     'Public file loaded without authentication.',
   )

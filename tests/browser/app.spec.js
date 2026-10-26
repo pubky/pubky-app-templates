@@ -706,6 +706,44 @@ test('the public reader escapes remote text and metadata and rejects private add
   expect(await calls(page, 'sessions.list')).toHaveLength(0)
 })
 
+for (const cached of [true, false]) {
+  test(`the public reader can read again after ${cached ? 'persisted page transitions' : 'a reload'}`, async ({
+    page,
+  }) => {
+    await page.goto('/public-reader.html')
+    await page.getByLabel('Pubky file address').fill(publicAddress)
+    await page.getByRole('button', { name: 'Read public file', exact: true }).click()
+    await expect(page.locator('.file-preview')).toHaveText('A public file')
+    if (cached) {
+      // Exercise lifecycle handling independently of Chromium's cache admission.
+      await page.evaluate(() => {
+        globalThis.window.dispatchEvent(
+          new globalThis.PageTransitionEvent('pagehide', { persisted: true }),
+        )
+        globalThis.window.dispatchEvent(
+          new globalThis.PageTransitionEvent('pageshow', { persisted: true }),
+        )
+      })
+      await expect(page.locator('.file-preview')).toHaveText('A public file')
+      await expect(page.getByLabel('Pubky file address')).toHaveValue(publicAddress)
+    } else {
+      await page.reload()
+      await expect(page.locator('.file-preview')).toHaveCount(0)
+      await page.getByLabel('Pubky file address').fill(publicAddress)
+    }
+    await page.evaluate(() => {
+      globalThis.__pubkyTest.publicFile.body = 'A later public file'
+    })
+    await page.getByRole('button', { name: 'Read public file', exact: true }).click()
+    await expect(page.locator('.file-preview')).toHaveText('A later public file')
+    await expect(page.locator('#storage-tools-status')).toHaveText(
+      'Public file loaded without authentication.',
+    )
+    expect(await calls(page, 'sessions.restore')).toHaveLength(0)
+    expect(await calls(page, 'sessions.list')).toHaveLength(0)
+  })
+}
+
 test('an oversized public stream is canceled and a later read recovers', async ({ page }) => {
   await page.goto('/public-reader.html')
   await page.evaluate(() => {
