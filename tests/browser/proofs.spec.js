@@ -68,7 +68,7 @@ async function openSignedApp(page, identity) {
     globalThis.localStorage.setItem('template:session', 'browser-test:template')
     globalThis.localStorage.setItem('test-sdk-records', JSON.stringify(['browser-test:template']))
   }, identity)
-  await page.goto('/')
+  await page.goto('/tools.html')
   await expect(page.locator('#proof-tools')).toBeVisible()
   await expect(page.locator('#proof-form button')).toBeEnabled()
 }

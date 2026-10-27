@@ -1,4 +1,5 @@
 import type { BrowserSessionStore } from '@synonymdev/pubky'
+import type { StorageSpace } from './config'
 import { decryptWithKeys, downloadedUploadName, isEncryptedUpload } from './encryption'
 import { MAX_FILE_BYTES, uploadedFilePath } from './storage-tools-data'
 
@@ -9,11 +10,12 @@ export async function recoverEncryptedUpload(
   expectedOwner: string,
   file: File,
   isCurrent: () => boolean = () => true,
+  space: StorageSpace = 'private',
 ) {
-  if (!isEncryptedUpload('private', file.name)) {
+  if (!isEncryptedUpload(space, file.name)) {
     throw new Error('Choose a ciphertext download with its original .pubkyenc filename.')
   }
-  const path = uploadedFilePath('private', file.name)
+  const path = uploadedFilePath(space, file.name)
   if (file.size > MAX_FILE_BYTES) throw new Error('This template handles files up to 5 MiB.')
   const bytes = new Uint8Array(await file.arrayBuffer())
   if (!isCurrent()) throw new Error('The active session changed.')
@@ -25,7 +27,7 @@ export async function recoverEncryptedUpload(
     if (!isCurrent()) throw new Error('The active session changed.')
     return {
       bytes: await decryptWithKeys(keys, path, bytes, expectedOwner, isCurrent),
-      filename: downloadedUploadName('private', file.name),
+      filename: downloadedUploadName(space, file.name),
     }
   } finally {
     keys.free()

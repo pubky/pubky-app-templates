@@ -32,13 +32,13 @@ after(async () => {
   await server?.close()
 })
 
-async function fixture() {
+async function fixture(space = 'private') {
   const key = await globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
     'encrypt',
     'decrypt',
   ])
   const keys = {
-    scopes: ['/priv/template/attachments/'],
+    scopes: [`/${space === 'public' ? 'pub' : 'priv'}/template/attachments/`],
     deriveCryptoKeyForPath: async () => key,
     free() {},
   }
@@ -49,10 +49,14 @@ async function fixture() {
     },
   }
   const plaintext = new Uint8Array([0, 1, 128, 255, 10])
-  const encrypted = await encryption.encryptUpload(session, path, plaintext)
+  const encrypted = await encryption.encryptUpload(
+    session,
+    data.uploadedFilePath(space, name),
+    plaintext,
+  )
   const calls = { restored: [], derived: [], freed: 0 }
   const recoveredKeys = {
-    scopes: ['/priv/template/attachments/'],
+    scopes: [`/${space === 'public' ? 'pub' : 'priv'}/template/attachments/`],
     async deriveCryptoKeyForPath(value) {
       calls.derived.push(value)
       return key
@@ -90,6 +94,27 @@ test('saved browser keys recover binary contents locally without a session or ne
   assert.deepEqual(calls.derived, [path], 'derive only the original private file path')
   assert.equal(calls.freed, 1)
   assert.equal(network.mock.callCount(), 0)
+})
+
+test('public ciphertext recovers locally using its original public path', async () => {
+  const { file, store, calls, plaintext } = await fixture('public')
+  const recovered = await recovery.recoverEncryptedUpload(
+    store,
+    recordId,
+    owner,
+    file,
+    () => true,
+    'public',
+  )
+  assert.deepEqual(recovered.bytes, plaintext)
+  assert.equal(recovered.filename, 'original-file.bin')
+  assert.deepEqual(calls.derived, [`/pub/template/attachments/${name}`])
+  assert.equal(calls.freed, 1)
+  await assert.rejects(
+    recovery.recoverEncryptedUpload(store, recordId, owner, file, () => true, 'private'),
+    /Could not decrypt/,
+  )
+  assert.equal(calls.freed, 2)
 })
 
 test('recovery authenticates the original filename, account, and ciphertext', async () => {

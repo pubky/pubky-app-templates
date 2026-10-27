@@ -38,7 +38,7 @@ async function sessionFor() {
   const calls = { keysFreed: 0, grantsFreed: 0, derivations: [], puts: [], blobs: [] }
   const files = new Map()
   const keys = () => ({
-    scopes: ['/priv/template/attachments/'],
+    scopes: ['/pub/template/attachments/', '/priv/template/attachments/'],
     deriveCryptoKeyForPath: async (value) => {
       calls.derivations.push(value)
       return key
@@ -101,6 +101,10 @@ test('ciphertext authentication rejects changed contents, IV, owner, and path', 
     encryption.decryptUpload(session, '/priv/template/attachments/renamed.pubkyenc', encrypted),
     /Could not decrypt/,
   )
+  await assert.rejects(
+    encryption.decryptUpload(session, '/pub/template/attachments/example.pubkyenc', encrypted),
+    /Could not decrypt/,
+  )
   const recovered = keys()
   try {
     assert.deepEqual(
@@ -112,13 +116,17 @@ test('ciphertext authentication rejects changed contents, IV, owner, and path', 
   }
 })
 
-test('malformed envelopes and paths outside the private upload folder are rejected', async () => {
+test('malformed envelopes and paths outside the app upload folders are rejected', async () => {
   const { session, calls } = await sessionFor()
   for (const bytes of [new Uint8Array(), new Uint8Array(100)]) {
     await assert.rejects(encryption.decryptUpload(session, path, bytes), /not a supported/)
   }
   for (const value of [
-    '/pub/template/attachments/file',
+    '/pub/other/attachments/file',
+    '/pub/template/attachments/',
+    '/pub/template/attachments/../secret',
+    '/pub/template/attachments/nested/file',
+    '/pub/template/attachments/%2e%2e',
     '/priv/other/attachments/file',
     '/priv/template/attachments/',
     '/priv/template/attachments/../secret',
@@ -127,7 +135,7 @@ test('malformed envelopes and paths outside the private upload folder are reject
   ]) {
     await assert.rejects(
       encryption.encryptUpload(session, value, new Uint8Array()),
-      /private upload folder/,
+      /upload folders/,
     )
   }
   assert.equal(calls.derivations.length, 0)
@@ -225,33 +233,35 @@ test('view changes during decryption discard its plaintext result', async (t) =>
   )
 })
 
-test('existing upload/download interaction stores ciphertext and supports a raw backup', async () => {
-  const { session, calls, files } = await sessionFor()
-  const bytes = new Uint8Array([0, 128, 255])
-  const name = await data.uploadFileBytes(
-    session,
-    'private',
-    new globalThis.File([bytes], 'photo.bin'),
-    () => true,
-    true,
-  )
-  assert.ok(name.endsWith('.pubkyenc'))
-  const stored = files.get(data.uploadedFilePath('private', name))
-  assert.notDeepEqual(stored, bytes)
-  assert.deepEqual(await data.readUploadedFile(session, 'private', name), bytes)
-  assert.deepEqual(await data.readUploadedFile(session, 'private', name, () => true, false), stored)
-  assert.equal(encryption.downloadedUploadName('private', name), name.slice(0, -'.pubkyenc'.length))
-  assert.equal(calls.blobs.length, 0)
-})
+for (const space of ['public', 'private']) {
+  test(`encrypted ${space} upload/download stores ciphertext and supports a raw backup`, async () => {
+    const { session, calls, files } = await sessionFor()
+    const bytes = new Uint8Array([0, 128, 255])
+    const name = await data.uploadFileBytes(
+      session,
+      space,
+      new globalThis.File([bytes], 'photo.bin'),
+      () => true,
+      true,
+    )
+    assert.ok(name.endsWith('.pubkyenc'))
+    const stored = files.get(data.uploadedFilePath(space, name))
+    assert.notDeepEqual(stored, bytes)
+    assert.deepEqual(await data.readUploadedFile(session, space, name), bytes)
+    assert.deepEqual(await data.readUploadedFile(session, space, name, () => true, false), stored)
+    assert.equal(encryption.downloadedUploadName(space, name), name.slice(0, -'.pubkyenc'.length))
+    assert.equal(calls.blobs.length, 0)
+  })
+}
 
-test('encrypted upload size includes its envelope and public encryption is rejected', async () => {
+test('encrypted upload size includes its envelope in both storage spaces', async () => {
   const { session, calls } = await sessionFor()
   const limit = data.MAX_FILE_BYTES - encryption.ENCRYPTION_OVERHEAD_BYTES
   for (const space of ['private', 'public']) {
     const file = new globalThis.File([new Uint8Array(limit + 1)], 'large.bin')
     await assert.rejects(
       data.uploadFileBytes(session, space, file, () => true, true),
-      space === 'private' ? /5 MiB/ : /Choose private storage/,
+      /5 MiB/,
     )
   }
   assert.equal(calls.derivations.length, 0)
@@ -276,11 +286,12 @@ test('plain uploads use native putBlob and cannot collide with the encrypted suf
   assert.deepEqual(await data.readUploadedFile(session, 'private', name), new Uint8Array([1, 2]))
 })
 
-test('upload UI exposes encryption only in private storage and labels encrypted downloads', () => {
-  assert.ok(ui.editorPanelHtml([], undefined, 'private').includes('name="encrypt-file"'))
-  assert.ok(!ui.editorPanelHtml([], undefined, 'public').includes('name="encrypt-file"'))
-  const html = ui.filesPanelHtml([], 'private', undefined, [{ name: 'file.pubkyenc' }])
-  assert.ok(html.includes('Encrypted file'))
-  assert.ok(html.includes('Decrypt &amp; download'))
-  assert.ok(html.includes('data-upload-action="download-encrypted"'))
+test('upload UI exposes encryption and encrypted download controls in both storage spaces', () => {
+  for (const space of ['public', 'private']) {
+    assert.ok(ui.editorPanelHtml([], undefined, space).includes('name="encrypt-file"'))
+    const html = ui.filesPanelHtml([], space, undefined, [{ name: 'file.pubkyenc' }])
+    assert.ok(html.includes('Encrypted file'))
+    assert.ok(html.includes('Decrypt &amp; download'))
+    assert.ok(html.includes('data-upload-action="download-encrypted"'))
+  }
 })

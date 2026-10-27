@@ -26,14 +26,26 @@ const state = (globalThis.__pubkyTest = {
 let contentKey
 function encryptionKeys() {
   return {
-    scopes: ['/priv/template/attachments/'],
+    scopes: ['/pub/template/attachments/', '/priv/template/attachments/'],
     async deriveCryptoKeyForPath(path) {
-      if (!path.startsWith('/priv/template/attachments/')) throw new Error('Outside test scope')
+      if (!/^\/(pub|priv)\/template\/attachments\//.test(path))
+        throw new Error('Outside test scope')
       if (state.holdDerivations) await new Promise((resolve) => (state.releaseDerivation = resolve))
-      contentKey ??= globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
-        'encrypt',
-        'decrypt',
-      ])
+      if (!contentKey) {
+        const storageKey = 'test-sdk-content-key'
+        let saved = globalThis.sessionStorage.getItem(storageKey)
+        if (!saved) {
+          saved = JSON.stringify([...globalThis.crypto.getRandomValues(new Uint8Array(32))])
+          globalThis.sessionStorage.setItem(storageKey, saved)
+        }
+        contentKey = globalThis.crypto.subtle.importKey(
+          'raw',
+          new Uint8Array(JSON.parse(saved)),
+          { name: 'AES-GCM' },
+          false,
+          ['encrypt', 'decrypt'],
+        )
+      }
       return contentKey
     },
     free() {},

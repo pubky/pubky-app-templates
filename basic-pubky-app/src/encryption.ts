@@ -8,7 +8,7 @@ const IV_BYTES = 12
 export const ENCRYPTION_OVERHEAD_BYTES = MAGIC.length + IV_BYTES + 16
 
 export function isEncryptedUpload(space: StorageSpace, name: string) {
-  return space === 'private' && name.endsWith(ENCRYPTED_FILE_SUFFIX)
+  return (space === 'public' || space === 'private') && name.endsWith(ENCRYPTED_FILE_SUFFIX)
 }
 
 export function downloadedUploadName(space: StorageSpace, name: string) {
@@ -131,12 +131,11 @@ async function deriveUploadKey(session: Session, path: Path) {
 }
 
 function validateUploadPath(path: Path) {
-  const directory = `${APP_PATHS.private}attachments/`
-  if (
-    !path.startsWith(directory) ||
-    !/^[a-zA-Z0-9_-][a-zA-Z0-9._-]*$/.test(path.slice(directory.length))
-  ) {
-    throw new Error('Encryption is available only for files in this app’s private upload folder.')
+  const directory = Object.values(APP_PATHS)
+    .map((prefix) => `${prefix}attachments/`)
+    .find((prefix) => path.startsWith(prefix))
+  if (!directory || !/^[a-zA-Z0-9_-][a-zA-Z0-9._-]*$/.test(path.slice(directory.length))) {
+    throw new Error('Encryption is available only for files in this app’s upload folders.')
   }
 }
 
