@@ -13,6 +13,7 @@ h2 { font-size: 1.1rem; }
 button,
 .button-link,
 input,
+select,
 textarea,
 .panel,
 .status,
@@ -25,6 +26,7 @@ textarea,
 button,
 .button-link,
 input,
+select,
 textarea {
   padding: 0.6rem;
   color: inherit;
@@ -50,7 +52,7 @@ button:not(:disabled):hover,
   background: #17202a;
 }
 .button-link.primary:not([aria-disabled="true"]):hover { border-color: #344054; background: #344054; }
-input, textarea { width: 100%; }
+input, select, textarea { width: 100%; }
 textarea { resize: vertical; }
 
 .app-shell {
@@ -62,6 +64,12 @@ textarea { resize: vertical; }
 .panel { min-width: 0; padding: 1rem; }
 .status { margin-bottom: 1rem; padding: 0.75rem 1rem; }
 .status.error { border-color: #fecdca; color: #b42318; }
+#proof-status,
+#proof-result,
+#encryption-recovery .status { margin: 1rem 0 0; }
+#proof-status:empty,
+#proof-result:empty,
+#encryption-recovery .status:empty { display: none; }
 
 .app-header,
 .section-header,
@@ -171,6 +179,14 @@ textarea { resize: vertical; }
   gap: 0.35rem;
   font-weight: 600;
 }
+
+.form-grid .checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 400;
+}
+.checkbox-field input { width: auto; margin: 0; flex: 0 0 auto; }
 
 .write-modes,
 .editor-fields { min-width: 0; margin: 0; padding: 0; border: 0; }

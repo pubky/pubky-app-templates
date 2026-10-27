@@ -92,7 +92,8 @@ function fileFormHtml(
       <fieldset id="upload-fields" data-write-mode="file" class="editor-fields" hidden disabled>
         <label>File <input type="file" name="file" disabled /></label>
         <small class="muted">Store any file as bytes, up to 5 MiB.</small>
-        ${space === 'private' ? '<label><input type="checkbox" name="encrypt-file" disabled /> Encrypt this upload</label><small class="muted">Requires encryption approval in Pubky Ring. The filename and size remain visible.</small>' : ''}
+        <label class="checkbox-field"><input type="checkbox" name="encrypt-file" disabled /><span>Encrypt this upload</span></label>
+        <small class="muted">Requires encryption approval in Pubky Ring. The filename and size remain visible.</small>
       </fieldset>
       <button type="submit" ${disabledAttr(Boolean(busy) || Boolean(file && !lock))}>Upload</button>
     </form>

@@ -78,8 +78,6 @@ export async function uploadFileBytes(
   encrypt = false,
 ) {
   requireStorageAccess(session, space)
-  if (encrypt && space !== 'private')
-    throw new Error('Choose private storage to encrypt an upload.')
   checkByteLength(file.size + (encrypt ? ENCRYPTION_OVERHEAD_BYTES : 0))
   const filename = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100) || 'file'
   const suffix = encrypt

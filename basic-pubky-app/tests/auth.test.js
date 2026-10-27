@@ -125,7 +125,12 @@ test('Ring sign-in requests only the public and private template capabilities', 
   t.after(() => kind.free())
   assert.deepEqual(
     new Set(validateCapabilities(capabilities).split(',')),
-    new Set(['/pub/template/:rw', '/priv/template/:rw', '/priv/template/attachments/:e']),
+    new Set([
+      '/pub/template/:rw',
+      '/priv/template/:rw',
+      '/pub/template/attachments/:e',
+      '/priv/template/attachments/:e',
+    ]),
   )
   assert.equal(kind.intent, 'signin')
   assert.deepEqual(options, {

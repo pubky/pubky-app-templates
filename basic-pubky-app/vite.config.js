@@ -7,6 +7,7 @@ export default defineConfig({
       input: {
         app: resolve(import.meta.dirname, 'index.html'),
         reader: resolve(import.meta.dirname, 'public-reader.html'),
+        tools: resolve(import.meta.dirname, 'tools.html'),
       },
     },
   },

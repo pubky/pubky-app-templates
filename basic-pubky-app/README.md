@@ -15,7 +15,7 @@ This template focuses on Pubky’s core building blocks. The included vanilla HT
 - Session persistence and sign-out synchronization across tabs via the SDK browser session store.
 - Public and private file storage under configured paths on the user’s Homeserver, using the same editor and file operations.
 - File editing with WebDAV locks, direct File uploads in the same editor section, metadata, downloads, and an anonymous public file reader.
-- Optional encryption for private uploads using scoped keys, plus local decryption with saved browser keys.
+- Optional encryption for public and private uploads using scoped keys, plus local decryption with saved browser keys.
 - Custom grant proofs that sign and verify a message locally.
 - Recent event history and live updates that resume from the last received cursor, scoped to the selected public or private folder.
 - Preconfigured weekly Dependabot updates for all npm dependencies, with Pubky stack packages grouped together.
@@ -76,7 +76,7 @@ Use **Public storage** and **Private storage** to choose where files are stored.
 
 The selector briefly explains who can read each folder. The event stream follows the selected space: public event requests work without a session, while private requests use your session and read access. Events contain metadata, not file contents.
 
-The template requests read and write access to both app folders and encryption keys only for `/priv/template/attachments/`. Sign-in selects `approvalFormat: 'signedApprovalV1'`. The signer may narrow the approved folders or decline encryption keys; normal storage still works in approved folders. Read-only grants allow listing, downloads, and events while editing stays disabled. To add permissions to an older session, sign out to revoke its grant, then authorize the app again. Deleting a local session record alone does not revoke a grant.
+The template requests read and write access to both app folders and encryption keys only for `/pub/template/attachments/` and `/priv/template/attachments/`. Sign-in selects `approvalFormat: 'signedApprovalV1'`. The signer may narrow the approved folders or decline encryption keys; normal storage still works in approved folders. Read-only grants allow listing, downloads, and events while editing stays disabled. To add permissions to an older session, sign out to revoke its grant, then authorize the app again. Deleting a local session record alone does not revoke a grant.
 
 ### File Locks
 
@@ -100,13 +100,13 @@ File-list metadata is optional: if its request fails, the file stays in the list
 
 The reusable `uploadFileBytes(session, space, file)` function in [`src/storage-tools-data.ts`](src/storage-tools-data.ts) sends ordinary `File` objects through `session.storage.putBlob`; encrypted uploads use `putBytes` for their ciphertext. Note creation in [`src/storage.ts`](src/storage.ts) demonstrates `session.storage.putJson`. Uploads and public reads have a 5 MiB limit. Uploaded files keep unique names under `/pub/template/attachments/` or `/priv/template/attachments/` so previous uploads remain accessible. Those folder names are a template convention, not a distinct SDK storage type; the public/private access rules apply to notes and uploads equally. File metadata describes the stored resource; downloaded content is treated as a file rather than executed in the page.
 
-Copy a public file's Pubky address to share it. Open **Public file reader** in the navigation to read it on a separate page, without signing in. The reader accepts public Pubky resource addresses; it does not grant access to private resources or provide selected-recipient sharing. **Your files** returns to the account workspace or sign-in screen. These are ordinary page links, so save editor changes before switching pages.
+Copy a public file's Pubky address to share it. Open **Public file reader** in the navigation to read it on a separate page, without signing in. The reader accepts public Pubky resource addresses; it does not grant access to private resources or provide selected-recipient sharing. **Your files** returns to the account workspace or sign-in screen. **Tools** opens message signing and encrypted-download recovery on their own page, using the selected saved session and the same sign-in and sign-out controls. Tools does not load file lists. These are ordinary page links, so save editor changes before switching pages.
 
 ### Encrypted Uploads
 
-Choose **Private storage**, then **Choose a file**, and enable **Encrypt this upload** before uploading. Encryption needs a fresh Ring authorization that approves the attachments folder’s `e` capability; the development identity shortcut does not supply encryption keys. Missing or narrowed key permissions produce an error without uploading plaintext. The 5 MiB stored-file limit includes the encryption envelope.
+Choose **Public storage** or **Private storage**, then **Choose a file**, and enable **Encrypt this upload** before uploading. Encryption needs a Ring authorization that approves the selected attachments folder’s `e` capability; existing sessions may need a fresh authorization to approve public encryption, and the development identity shortcut does not supply encryption keys. Missing or narrowed key permissions produce an error without uploading plaintext. The 5 MiB stored-file limit includes the encryption envelope. Public encrypted files remain downloadable by anyone as ciphertext; reading their contents requires the key. This template does not distribute keys to other recipients.
 
-The encrypted file appears in the normal list with a `.pubkyenc` suffix. **Decrypt & download** reads and decrypts it. **Download ciphertext** saves its encrypted bytes; keep that download’s original filename. In **Recover an encrypted download**, choose the ciphertext and select **Decrypt with saved keys** to decrypt locally. This uses `browserSessionStore.restoreEncryptionKeys(recordId)` without restoring an authenticated session or making a network request. The panel uses the currently selected account’s saved record.
+The encrypted file appears in the normal list with a `.pubkyenc` suffix. **Decrypt & download** reads and decrypts it. **Download ciphertext** saves its encrypted bytes; keep that download’s original filename. Open **Tools** and, in **Recover an encrypted download**, choose the file’s **Original storage** and ciphertext, then select **Decrypt with saved keys** to decrypt locally. This uses `browserSessionStore.restoreEncryptionKeys(recordId)` without restoring an authenticated session or making a network request during decryption. The page first restores the selected session through the normal sign-in lifecycle; the recovery panel uses that account’s saved record.
 
 [`src/encryption.ts`](src/encryption.ts) derives a non-extractable AES-GCM key using `deriveCryptoKeyForPath`, generates a fresh 12-byte IV for every encryption, binds the envelope to its account and storage path, and frees the owned SDK key bundle. This envelope and filename suffix are template conventions. Renaming or moving encrypted files breaks decryption. File names, sizes, and other resource metadata remain visible to the Homeserver.
 
@@ -118,7 +118,7 @@ Use **Recent history** for the latest 12 changes, newest first. **Start live** f
 
 ## Custom Grant Proofs
 
-Use **Sign and verify a message** to sign up to 4 KiB of text with the session’s delegated key and verify the root-signed grant and client proof locally. [`src/proofs.ts`](src/proofs.ts) demonstrates `createCustomPop` and `verifyCustomGrantPop`; the UI displays the verified identity and message. It checks the expected identity, client ID, audience, purpose, challenge, and a 60-second maximum proof age, and remembers used nonces until the grant expires.
+Use **Sign and verify a message** on the **Tools** page to sign up to 4 KiB of text with the session’s delegated key and verify the root-signed grant and client proof locally. [`src/proofs.ts`](src/proofs.ts) demonstrates `createCustomPop` and `verifyCustomGrantPop`; the UI displays the verified identity and message. It checks the expected identity, client ID, audience, purpose, challenge, and a 60-second maximum proof age, and remembers used nonces until the grant expires.
 
 Replay tracking lasts only while this panel remains mounted. Offline verification cannot check current revocation, and storage capabilities do not authorize service actions. A real service must enforce its own permissions and maintain durable, atomic challenge and replay state. See the [custom proof contract](https://github.com/pubky/pubky-homeserver/blob/v0.17.1/docs/CUSTOM_POP.md).
 
@@ -135,7 +135,7 @@ export const APP_PATHS = {
   private: `/priv/${APP_CLIENT_ID}/`,
 }
 export const APP_CAPABILITIES = validateCapabilities(
-  `${APP_PATHS.public}:rw,${APP_PATHS.private}:rw,${APP_PATHS.private}attachments/:e`,
+  `${APP_PATHS.public}:rw,${APP_PATHS.private}:rw,${APP_PATHS.public}attachments/:e,${APP_PATHS.private}attachments/:e`,
 )
 export const MAX_EVENT_BYTES = 8 * 1024
 ```
@@ -157,6 +157,6 @@ The parent repository also runs Chromium and Firefox regression tests in CI. The
 
 `src/client.ts` creates the shared SDK client; `src/pubky.ts` contains account and sign-in functions. The public reader and event helpers use the client directly and do not import the account controller.
 
-- To remove the public reader, delete `public-reader.html`, `src/public-reader.ts`, and `src/storage-tools.ts`; remove its navigation link in `src/app.ts` and its entry in `vite.config.js`.
-- To keep only the public reader, delete `index.html`, `src/main.ts`, `src/app.ts`, and `tests/browser-cache.test.js` (the account controller tests). Rename `public-reader.html` to `index.html` so the reader opens at `/`. In `vite.config.js`, remove the `app` input and change the remaining input to `reader: resolve(import.meta.dirname, 'index.html')`. Remove the **Your files** link and its separator from `src/public-reader.ts`. Run `npm test` and `npm run build` to check the remaining template. The reader imports only the shared SDK setup and file helpers; unused account helpers and their tests can also be deleted together.
+- To remove the public reader, delete `public-reader.html`, `src/public-reader.ts`, and `src/storage-tools.ts`; remove its navigation entry in `src/navigation.ts` and its entry in `vite.config.js`.
+- To keep only the public reader, delete `index.html`, `tools.html`, `src/main.ts`, `src/tools.ts`, `src/app.ts`, and `tests/browser-cache.test.js` (the account controller tests). Rename `public-reader.html` to `index.html` so the reader opens at `/`. In `vite.config.js`, remove the `app` and `tools` inputs and change the remaining input to `reader: resolve(import.meta.dirname, 'index.html')`. Remove the **Your files** and **Tools** entries from `src/navigation.ts`. Run `npm test` and `npm run build` to check the remaining template. The reader imports only the shared SDK setup and file helpers; unused account helpers and their tests can also be deleted together.
 - To remove an account-page example, remove its panel, imports, and event handlers together. Shared file helpers are ordinary functions, with no feature registry or required initialization order. Panel update functions tolerate absent panel elements.

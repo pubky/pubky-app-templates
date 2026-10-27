@@ -2,7 +2,7 @@ import { test, expect } from './browser-test.js'
 
 const accountId = 'browser-test:template'
 
-async function openApp(page, signedIn = true) {
+async function openApp(page, signedIn = true, path = '/') {
   await page.addInitScript(
     ({ accountId, signedIn }) => {
       globalThis.__pubkySeed = { files: {} }
@@ -20,7 +20,7 @@ async function openApp(page, signedIn = true) {
     },
     { accountId, signedIn },
   )
-  await page.goto('/')
+  await page.goto(path)
   await expect(page.locator(signedIn ? '#sign-out' : '#refresh-ring-signin')).toBeEnabled()
 }
 
@@ -89,4 +89,25 @@ test('a cached sign-in request resumes and the public reader remains usable afte
   await expect(page.locator('#storage-tools-status')).toHaveText(
     'Public file loaded without authentication.',
   )
+})
+
+test('Back to Tools discards cached proof content after another tab signs out', async ({
+  page,
+}) => {
+  await openApp(page, true, '/tools.html')
+  await expect(page.locator('#proof-tools')).toBeVisible()
+  await page.locator('#proof-form textarea').fill('Private cached proof message')
+  await page.getByRole('link', { name: 'Public file reader', exact: true }).click()
+  const otherPage = await page.context().newPage()
+  await otherPage.goto('/')
+  await expect(otherPage.locator('#sign-out')).toBeEnabled()
+  await otherPage.locator('#sign-out').click()
+  await expect(otherPage.locator('#authorize-ring')).toBeVisible()
+  await otherPage.close()
+  await page.goBack({ waitUntil: 'commit' })
+  await expectCachedRestore(page)
+  await expect(page.locator('#authorize-ring')).toBeVisible()
+  await expect(page.locator('#proof-tools')).toHaveCount(0)
+  await expect(page.locator('#encryption-recovery')).toHaveCount(0)
+  await expect(page.locator('body')).not.toContainText('Private cached proof message')
 })

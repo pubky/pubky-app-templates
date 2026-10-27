@@ -2,6 +2,7 @@ import type { Session } from '@synonymdev/pubky'
 import { version as pubkySdkVersion } from '@synonymdev/pubky/package.json'
 import { hasStorageAccess, requireStorageAccess } from './access'
 import { type StorageSpace } from './config'
+import { pageNavigationHtml } from './navigation'
 import {
   isAuthorizeRingLink,
   authViewHtml,
@@ -108,14 +109,16 @@ const state: State = {
 }
 
 let app: HTMLElement
+let currentPage: 'files' | 'tools' = 'files'
 let activeOperation: symbol | undefined
 let ringAttempt: RingAuthAttempt | undefined
 let pageSuspended = false
 let sessionTools: Array<{ dispose: () => void }> = []
 let suspendedDrafts: { sessionId: string; space: StorageSpace; drafts: State['drafts'] } | undefined
 
-export function start(root: HTMLElement) {
+export function start(root: HTMLElement, page: 'files' | 'tools' = 'files') {
   app = root
+  currentPage = page
   app.addEventListener('click', handleClick)
   app.addEventListener('submit', handleSubmit)
   app.addEventListener('change', (event) => {
@@ -207,9 +210,7 @@ function mount() {
       <header class="app-header">
         <div>
           <h1>Pubky App Template</h1>
-          <nav class="page-nav" aria-label="Pages">
-            <strong aria-current="page">Your files</strong> · <a href="./public-reader.html">Public file reader</a>
-          </nav>
+          ${pageNavigationHtml(currentPage)}
         </div>
         ${session ? signedInHeader(session) : ''}
       </header>
@@ -236,6 +237,14 @@ function signedInHeader(session: Session) {
 function signedInViewHtml() {
   if (state.logoutPending)
     return '<p>Sign-out is pending. Retry to finish revoking this session before making more requests.</p>'
+  if (currentPage === 'tools') {
+    return `
+      <section class="grid">
+        ${proofPanelHtml()}
+        ${encryptionRecoveryPanelHtml(state.space)}
+      </section>
+    `
+  }
   return `
     ${storageSpacesHtml(state.space, state.busy)}
     ${state.session && hasStorageAccess(state.session, state.space, 'r') && !hasStorageAccess(state.session, state.space) ? '<p class="muted">Read-only access to this folder. Sign out and authorize write access to edit files.</p>' : ''}
@@ -243,10 +252,6 @@ function signedInViewHtml() {
       ${editorPanelHtml(state.files, state.editingId, state.space, state.busy, state.drafts[state.space], state.fileLock)}
       ${filesPanelHtml(state.files, state.space, state.busy, state.uploads)}
       ${eventStreamPanelHtml(state.eventStreamEvents, Boolean(state.stopEventStream), state.space, state.busy)}
-    </section>
-    <section class="grid">
-      ${proofPanelHtml()}
-      ${encryptionRecoveryPanelHtml()}
     </section>
   `
 }
@@ -265,7 +270,7 @@ function disposeSessionTools() {
 }
 
 function mountSessionTools() {
-  if (!state.session || state.logoutPending || pageSuspended) return
+  if (currentPage !== 'tools' || !state.session || state.logoutPending || pageSuspended) return
   const proofRoot = app.querySelector<HTMLElement>('#proof-tools')
   if (proofRoot) sessionTools.push(createProofTools(proofRoot, state.session))
   const recoveryRoot = app.querySelector<HTMLElement>('#encryption-recovery')
@@ -890,8 +895,10 @@ async function activateSession(session: Session, notice: string, drafts?: typeof
   state.logoutPending = false
   setNotice(notice)
   // A signer may approve only part of the requested capabilities, including no storage.
-  if (hasStorageAccess(session, state.space, 'r')) await refreshFiles()
-  else setNotice(`${notice} No folder has read access; authorize again to use storage.`)
+  if (currentPage === 'files') {
+    if (hasStorageAccess(session, state.space, 'r')) await refreshFiles()
+    else setNotice(`${notice} No folder has read access; authorize again to use storage.`)
+  }
 }
 
 function cancelRingSignin() {

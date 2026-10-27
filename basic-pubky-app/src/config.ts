@@ -8,7 +8,7 @@ export const APP_PATHS = {
   private: `/priv/${APP_CLIENT_ID}/`,
 } as const
 export const APP_CAPABILITIES = validateCapabilities(
-  `${APP_PATHS.public}:rw,${APP_PATHS.private}:rw,${APP_PATHS.private}attachments/:e`,
+  `${APP_PATHS.public}:rw,${APP_PATHS.private}:rw,${APP_PATHS.public}attachments/:e,${APP_PATHS.private}attachments/:e`,
 ) as Capabilities
 
 // Events contain resource metadata, not file contents. Bound incoming SSE payloads.
