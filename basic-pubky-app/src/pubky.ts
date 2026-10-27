@@ -98,6 +98,7 @@ export async function startRingAuthFlow(
   const flow = await pubky.startGrantAuthFlow(APP_CAPABILITIES, AuthFlowKind.signin(), {
     clientId: APP_CLIENT_ID,
     relay: HTTP_RELAY,
+    approvalFormat: 'signedApprovalV1',
   })
   let saved: string
   try {

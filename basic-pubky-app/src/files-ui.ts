@@ -3,6 +3,7 @@ import { disabledAttr, escapeHtml, formatDate } from './html'
 import { filePath, type AppFile, type FileLock } from './storage'
 import { uploadedFilePath, type UploadedFile } from './storage-tools-data'
 import type { FileDraft } from './file-drafts'
+import { isEncryptedUpload } from './encryption'
 
 export function editorPanelHtml(
   files: AppFile[],
@@ -91,6 +92,8 @@ function fileFormHtml(
       <fieldset id="upload-fields" data-write-mode="file" class="editor-fields" hidden disabled>
         <label>File <input type="file" name="file" disabled /></label>
         <small class="muted">Store any file as bytes, up to 5 MiB.</small>
+        <label class="checkbox-field"><input type="checkbox" name="encrypt-file" disabled /><span>Encrypt this upload</span></label>
+        <small class="muted">Requires encryption approval in Pubky Ring. The filename and size remain visible.</small>
       </fieldset>
       <button type="submit" ${disabledAttr(Boolean(busy) || Boolean(file && !lock))}>Upload</button>
     </form>
@@ -141,16 +144,18 @@ function filesListHtml(
 }
 
 function uploadedFileItem(file: UploadedFile, space: StorageSpace, busy?: string) {
+  const encrypted = isEncryptedUpload(space, file.name)
   return `
     <li>
       <div>
         <strong title="${escapeHtml(uploadedFilePath(space, file.name))}">${escapeHtml(file.name)}</strong>
-        <span>Uploaded file</span>
+        <span>${encrypted ? 'Encrypted file' : 'Uploaded file'}</span>
         ${file.metadata ? `<small>${escapeHtml(metadataLabel(file.metadata))}</small>` : ''}
         ${file.metadataUnavailable ? '<small>Metadata unavailable.</small>' : ''}
       </div>
       <div class="actions">
-        <button type="button" data-upload-action="download" data-upload-name="${escapeHtml(file.name)}" ${disabledAttr(Boolean(busy))}>Download</button>
+        <button type="button" data-upload-action="download" data-upload-name="${escapeHtml(file.name)}" ${disabledAttr(Boolean(busy))}>${encrypted ? 'Decrypt &amp; download' : 'Download'}</button>
+        ${encrypted ? `<button type="button" data-upload-action="download-encrypted" data-upload-name="${escapeHtml(file.name)}" ${disabledAttr(Boolean(busy))}>Download ciphertext</button>` : ''}
         <button type="button" data-upload-action="delete" data-upload-name="${escapeHtml(file.name)}" ${disabledAttr(Boolean(busy))}>Delete</button>
         ${space === 'public' ? `<button type="button" data-upload-action="copy" data-upload-name="${escapeHtml(file.name)}" ${disabledAttr(Boolean(busy))}>Copy public address</button>` : ''}
       </div>

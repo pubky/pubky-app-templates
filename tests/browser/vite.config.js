@@ -30,6 +30,7 @@ export default {
       input: {
         app: resolve(app, 'index.html'),
         reader: resolve(app, 'public-reader.html'),
+        tools: resolve(app, 'tools.html'),
       },
     },
   },
