@@ -19,7 +19,7 @@
     "vite": "^8.3.4"
   },
   "dependencies": {
-    "@synonymdev/pubky": "^0.16.2",
+    "@synonymdev/pubky": "^0.17.1",
     "qrcode": "^1.5.4"
   }
 }
