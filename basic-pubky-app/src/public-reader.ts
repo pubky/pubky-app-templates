@@ -1,5 +1,6 @@
 import './style.css'
 import { version as pubkySdkVersion } from '@synonymdev/pubky/package.json'
+import { pageNavigationHtml } from './navigation'
 import { createStorageTools, storageToolsPanelHtml } from './storage-tools'
 
 const app = document.querySelector<HTMLDivElement>('#app')
@@ -10,9 +11,7 @@ app.innerHTML = `
     <header class="app-header">
       <div>
         <h1>Pubky App Template</h1>
-        <nav class="page-nav" aria-label="Pages">
-          <a href="./">Your files</a> · <strong aria-current="page">Public file reader</strong>
-        </nav>
+        ${pageNavigationHtml('reader')}
       </div>
     </header>
     ${storageToolsPanelHtml()}

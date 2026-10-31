@@ -29,7 +29,24 @@ export function formatDate(value: string) {
 }
 
 export function formatError(error: unknown) {
-  if (error instanceof Error) return error.message
+  if (error instanceof Error) {
+    if (error.name === 'CredentialRefreshError') {
+      return `Session credentials could not be refreshed. ${error.message} Sign out and authorize again if access was revoked or expired.`
+    }
+    if (error.name === 'RequestError' && 'data' in error) {
+      const data = error.data
+      if (typeof data === 'object' && data !== null && 'reason' in data) {
+        if (['Timeout', 'Connection', 'Body'].includes(String(data.reason))) {
+          return `${error.message} The operation's result may be unknown; check the file before repeating a write.`
+        }
+        if (data.reason === 'Decode')
+          return `${error.message} The server response could not be decoded.`
+        if (data.reason === 'InvalidRequest')
+          return `${error.message} Check the request parameters.`
+      }
+    }
+    return error.message
+  }
   return String(error)
 }
 

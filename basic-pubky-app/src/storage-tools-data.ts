@@ -2,6 +2,13 @@ import { PubkyResource } from '@synonymdev/pubky'
 import type { Address, Path, PublicStorage, ResourceStats, Session } from '@synonymdev/pubky'
 import { requireStorageAccess } from './access'
 import { APP_PATHS, type StorageSpace } from './config'
+import {
+  decryptUpload,
+  encryptUpload,
+  ENCRYPTED_FILE_SUFFIX,
+  ENCRYPTION_OVERHEAD_BYTES,
+  isEncryptedUpload,
+} from './encryption'
 
 export const MAX_FILE_BYTES = 5 * 1024 * 1024
 const PAGE_SIZE = 50
@@ -25,7 +32,7 @@ export async function listUploadedFiles(
   space: StorageSpace,
   isCurrent: () => boolean = () => true,
 ) {
-  requireStorageAccess(session, space)
+  requireStorageAccess(session, space, 'r')
   const directory = `${APP_PATHS[space]}attachments/` as Path
   const names: string[] = []
   let cursor: string | null = null
@@ -68,15 +75,34 @@ export async function uploadFileBytes(
   space: StorageSpace,
   file: File,
   isCurrent: () => boolean = () => true,
+  encrypt = false,
 ) {
   requireStorageAccess(session, space)
-  checkByteLength(file.size)
+  checkByteLength(file.size + (encrypt ? ENCRYPTION_OVERHEAD_BYTES : 0))
   const filename = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100) || 'file'
-  const name = `${crypto.randomUUID()}-${filename}`
-  const bytes = new Uint8Array(await file.arrayBuffer())
-  checkByteLength(bytes.byteLength)
+  const suffix = encrypt
+    ? ENCRYPTED_FILE_SUFFIX
+    : filename.endsWith(ENCRYPTED_FILE_SUFFIX)
+      ? '.raw'
+      : ''
+  const name = `${crypto.randomUUID()}-${filename}${suffix}`
+  const path = uploadedFilePath(space, name)
   requireCurrent(isCurrent)
-  await session.storage.putBytes(uploadedFilePath(space, name), bytes)
+  if (encrypt) {
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    try {
+      checkByteLength(bytes.byteLength + ENCRYPTION_OVERHEAD_BYTES)
+      const encrypted = await encryptUpload(session, path, bytes, isCurrent)
+      requireCurrent(isCurrent)
+      await session.storage.putBytes(path, encrypted)
+    } finally {
+      bytes.fill(0)
+    }
+  } else {
+    // The SDK accepts the native File without materializing another JS byte copy.
+    await session.storage.putBlob(path, file)
+  }
+  requireCurrent(isCurrent)
   return name
 }
 
@@ -85,8 +111,9 @@ export async function readUploadedFile(
   space: StorageSpace,
   name: string,
   isCurrent: () => boolean = () => true,
+  decrypt = true,
 ) {
-  requireStorageAccess(session, space)
+  requireStorageAccess(session, space, 'r')
   const path = uploadedFilePath(space, name)
   // Metadata may be unavailable while GET still works; streaming enforces the size limit.
   const metadata = await session.storage.stats(path).catch((error) => {
@@ -96,7 +123,10 @@ export async function readUploadedFile(
   if (metadata === undefined) throw new Error('This file no longer exists.')
   if (metadata?.contentLength !== undefined) checkByteLength(metadata.contentLength)
   requireCurrent(isCurrent)
-  return readLimitedResponse(await session.storage.get(path), isCurrent)
+  const bytes = await readLimitedResponse(await session.storage.get(path), isCurrent)
+  return decrypt && isEncryptedUpload(space, name)
+    ? decryptUpload(session, path, bytes, isCurrent)
+    : bytes
 }
 
 export async function deleteUploadedFile(session: Session, space: StorageSpace, name: string) {
@@ -204,6 +234,7 @@ function checkByteLength(length: number) {
 }
 
 function statusCode(error: unknown) {
+  if (error instanceof Error && error.name === 'CredentialRefreshError') return undefined
   if (typeof error !== 'object' || error === null || !('data' in error)) return undefined
   const data = error.data
   return typeof data === 'object' && data !== null && 'statusCode' in data

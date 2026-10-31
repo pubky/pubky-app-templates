@@ -125,10 +125,19 @@ test('Ring sign-in requests only the public and private template capabilities', 
   t.after(() => kind.free())
   assert.deepEqual(
     new Set(validateCapabilities(capabilities).split(',')),
-    new Set(['/pub/template/:rw', '/priv/template/:rw']),
+    new Set([
+      '/pub/template/:rw',
+      '/priv/template/:rw',
+      '/pub/template/attachments/:e',
+      '/priv/template/attachments/:e',
+    ]),
   )
   assert.equal(kind.intent, 'signin')
-  assert.deepEqual(options, { clientId: 'template', relay: config.HTTP_RELAY })
+  assert.deepEqual(options, {
+    clientId: 'template',
+    relay: config.HTTP_RELAY,
+    approvalFormat: 'signedApprovalV1',
+  })
   assert.equal(flow.authorizationUrl, sdkFlow.authorizationUrl)
   assert.equal(await flow.awaitApproval, approvedSession)
 })
