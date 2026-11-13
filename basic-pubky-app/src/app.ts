@@ -278,12 +278,12 @@ function signedInViewHtml() {
 function permissionPanelHtml() {
   const session = requireSession()
   return `
-    <section class="panel">
+    <section class="panel permissions-panel">
       <details><summary>Granted permissions</summary>
         <p>Read (r), write (w), and encryption keys (e) are approved separately. Receiving keys cannot be undone by revoking a grant.</p>
         <ul>${session.info.capabilities.map((capability) => `<li><code>${escapeHtml(capability)}</code></li>`).join('') || '<li>No capabilities approved.</li>'}</ul>
+        <button id="authorize-storage-permissions" type="button">Authorize storage access again</button>
       </details>
-      <button id="authorize-storage-permissions" type="button">Authorize storage access again</button>
       <div id="previous-grant-cleanup">${hasPendingSessionCleanup() ? '<p>Previous grant cleanup is pending. Your current authorization is active.</p><button id="retry-permission-cleanup" type="button">Retry previous grant cleanup</button>' : ''}</div>
     </section>
     <div id="permission-auth-slot">${permissionAuthHtml()}</div>

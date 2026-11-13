@@ -62,6 +62,7 @@ textarea { resize: vertical; }
 }
 
 .panel { min-width: 0; padding: 1rem; }
+.permissions-panel { margin-bottom: 1rem; }
 .status { margin-bottom: 1rem; padding: 0.75rem 1rem; }
 .status.error { border-color: #fecdca; color: #b42318; }
 #proof-status,
