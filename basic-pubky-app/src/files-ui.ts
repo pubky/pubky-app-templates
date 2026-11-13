@@ -94,6 +94,10 @@ function fileFormHtml(
         <small class="muted">Store any file as bytes, up to 5 MiB.</small>
         <label class="checkbox-field"><input type="checkbox" name="encrypt-file" disabled /><span>Encrypt this upload</span></label>
         <small class="muted">Requires encryption approval in Pubky Ring. The filename and size remain visible.</small>
+        <div id="encryption-authorization" hidden>
+          <p>Approve encryption access for this folder in Pubky Ring. Keys remain usable after the grant is revoked.</p>
+          <button id="authorize-encryption" type="button">Authorize encrypted uploads</button>
+        </div>
       </fieldset>
       <button type="submit" ${disabledAttr(Boolean(busy) || Boolean(file && !lock))}>Upload</button>
     </form>

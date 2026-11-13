@@ -8,7 +8,7 @@ export function encryptionRecoveryPanelHtml(space: StorageSpace = 'private') {
   return `
     <section id="encryption-recovery" class="panel">
       <h2>Recover an encrypted download</h2>
-      <p class="muted">Choose a ciphertext download with its original filename. Decrypt locally using this account's saved browser keys, without a network request.</p>
+      <p class="muted">Choose a ciphertext download. Decrypt locally using this account's saved browser keys, without a network request.</p>
       <form class="form-grid">
         <label>Original storage
           <select name="space">
@@ -17,6 +17,8 @@ export function encryptionRecoveryPanelHtml(space: StorageSpace = 'private') {
           </select>
         </label>
         <label>Encrypted file <input type="file" name="ciphertext" accept=".pubkyenc" required /></label>
+        <label>Original stored filename <input name="original-name" autocomplete="off" required /></label>
+        <small class="muted">Browsers may rename downloads. If needed, replace this with the exact filename shown in the Files list, including its UUID prefix and .pubkyenc suffix.</small>
         <button type="submit">Decrypt with saved keys</button>
       </form>
       <p class="status" role="status"></p>
@@ -29,9 +31,15 @@ export function createEncryptionRecovery(root: HTMLElement, recordId: string, ow
   let busy = false
   const active = () => !disposed && root.isConnected
   const status = root.querySelector<HTMLElement>('[role="status"]')!
+  const ciphertext = root.querySelector<HTMLInputElement>('input[name="ciphertext"]')!
+  const originalName = root.querySelector<HTMLInputElement>('input[name="original-name"]')!
   const controls = root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>(
     'input,button,select',
   )
+  const change = (event: Event) => {
+    if (!active() || busy || event.target !== ciphertext) return
+    originalName.value = ciphertext.files?.[0]?.name ?? ''
+  }
   const submit = (event: Event) => {
     event.preventDefault()
     event.stopPropagation()
@@ -40,8 +48,10 @@ export function createEncryptionRecovery(root: HTMLElement, recordId: string, ow
     const data = new FormData(form)
     const file = data.get('ciphertext')
     const space = data.get('space')
+    const originalStoredFilename = data.get('original-name')
     if (!(file instanceof File) || !file.name) return
     if (space !== 'public' && space !== 'private') return
+    if (typeof originalStoredFilename !== 'string') return
     busy = true
     controls.forEach((control) => (control.disabled = true))
     status.textContent = 'Recovering encryption keys...'
@@ -54,6 +64,7 @@ export function createEncryptionRecovery(root: HTMLElement, recordId: string, ow
           file,
           active,
           space,
+          originalStoredFilename,
         )
         if (!active()) return
         downloadBytes(result.bytes, result.filename)
@@ -68,10 +79,12 @@ export function createEncryptionRecovery(root: HTMLElement, recordId: string, ow
     })()
   }
   root.addEventListener('submit', submit)
+  root.addEventListener('change', change)
   return {
     dispose() {
       disposed = true
       root.removeEventListener('submit', submit)
+      root.removeEventListener('change', change)
       root.querySelector('form')?.reset()
       status.textContent = ''
     },

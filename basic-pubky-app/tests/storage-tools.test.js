@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
 import { fileURLToPath, URL } from 'node:url'
-import { Keypair, PubkyResource } from '@synonymdev/pubky'
+import { Keypair, PubkyResource, resolvePubky } from '@synonymdev/pubky'
 import { createServer } from 'vite'
 
 let server
 let data
 let filesUi
+let downloads
 const owner = Keypair.random().publicKey
 const anotherOwner = Keypair.random().publicKey
 const address = (path, key = owner) => `pubky://${key.z32()}${path}`
@@ -22,6 +23,7 @@ before(async () => {
   })
   data = await server.ssrLoadModule('/src/storage-tools-data.ts')
   filesUi = await server.ssrLoadModule('/src/files-ui.ts')
+  downloads = await server.ssrLoadModule('/src/storage-download.ts')
 })
 
 after(async () => {
@@ -64,25 +66,27 @@ test('public reader accepts both public Pubky address forms and rejects private 
     'http://localhost/admin',
     address('/priv/template/file'),
     address('/pub/template/'),
-    address('/pub/template/file?secret=1'),
-    address('/pub/template/file#fragment'),
     address('/pub/template/../secret'),
     address('/pub/template/./secret'),
     address('/pub//template/secret'),
     address('/pub/template/file\u0000'),
     address('/pub/template/file\u007f'),
-    address('/pub/template/file name'),
+    address('/pub/template/nested\\file'),
+    address('/pub/template/file\u0085'),
     'pubky-invalid/pub/file',
   ])
     assert.throws(() => data.parsePublicAddress(value), undefined, value)
 })
 
 test('public reads preserve Unicode and literal percent filenames through the real SDK parser', async () => {
-  for (const [filename, encodedFilename] of [
-    ['café.json', 'caf%C3%A9.json'],
-    ['100%.txt', '100%25.txt'],
-    ['caf%C3%A9.json', 'caf%25C3%25A9.json'],
-    ['%2e%2e.txt', '%252e%252e.txt'],
+  for (const filename of [
+    'café.json',
+    'two words.txt',
+    '100%.txt',
+    'caf%C3%A9.json',
+    '%2e%2e.txt',
+    'literal%2Fname.txt',
+    'what?#.txt',
   ]) {
     for (const prefix of [`pubky://${owner.z32()}`, owner.toString()]) {
       const input = `${prefix}/pub/any-app/${filename}`
@@ -110,11 +114,34 @@ test('public reads preserve Unicode and literal percent filenames through the re
       )
 
       assert.equal(result.address, input)
+      assert.equal(result.filename, filename)
       assert.deepEqual([...result.bytes], [111, 107])
       assert.deepEqual(calls, [
-        { target: input, path: `/pub/any-app/${encodedFilename}` },
-        { target: input, path: `/pub/any-app/${encodedFilename}` },
+        { target: input, path: `/pub/any-app/${filename}` },
+        { target: input, path: `/pub/any-app/${filename}` },
       ])
+    }
+  }
+})
+
+test('SDK transport URLs encode plain filenames exactly once', () => {
+  for (const filename of [
+    'café 100%.txt',
+    'literal%2Fname.txt',
+    'literal%2e%2e.txt',
+    'what?#.txt',
+  ]) {
+    const input = address(`/pub/any-app/${filename}`)
+    const resource = PubkyResource.parse(input)
+    try {
+      assert.equal(resource.path, `/pub/any-app/${filename}`)
+      assert.equal(resource.toPubkyUrl(), input)
+      const transport = new URL(resolvePubky(input))
+      assert.ok(transport.pathname.endsWith(`/pub/any-app/${encodeURIComponent(filename)}`))
+      assert.equal(transport.search, '')
+      assert.equal(transport.hash, '')
+    } finally {
+      resource.free()
     }
   }
 })
@@ -139,7 +166,7 @@ test('uploaded file listings validate owner and app folder before requesting met
   const { session } = sessionFor([valid, address('/priv/template/attachments/two%20words.bin')])
   assert.deepEqual(
     (await data.listUploadedFiles(session, 'private')).map((file) => file.name),
-    ['file.bin'],
+    ['file.bin', 'two%20words.bin'],
   )
 })
 
@@ -187,7 +214,7 @@ test('shallow upload listings skip directories and preserve pagination and file 
   const secondPage = [
     address(`${directory}one.bin`),
     address(`${directory}nested/`),
-    address(`${directory}two.bin`),
+    address(`${directory}café 100%25.bin`),
     address(`${directory}one.bin`),
   ]
   const { session, calls } = sessionFor()
@@ -200,13 +227,13 @@ test('shallow upload listings skip directories and preserve pagination and file 
   const files = await data.listUploadedFiles(session, 'private')
   assert.deepEqual(
     files.map((file) => file.name),
-    ['one.bin', 'two.bin'],
+    ['one.bin', 'café 100%25.bin'],
   )
   assert.deepEqual(calls.lists, [
     [directory, null, false, 50, true],
     [directory, firstPage.at(-1), false, 50, true],
   ])
-  assert.deepEqual(calls.metadata, [`${directory}one.bin`, `${directory}two.bin`])
+  assert.deepEqual(calls.metadata, [`${directory}one.bin`, `${directory}café 100%25.bin`])
 })
 
 test('upload listings stop when the server repeats a full page of directories', async () => {
@@ -250,7 +277,16 @@ test('stale upload listings stop before requesting file metadata', async () => {
 
 test('uploaded filenames cannot redirect downloads or deletes', async () => {
   const { session, calls } = sessionFor()
-  for (const name of ['../secret', 'nested/file', '%2e%2e', 'file?query', '.hidden', '..']) {
+  for (const name of [
+    '../secret',
+    'nested/file',
+    'nested\\file',
+    'file\u0000',
+    'file\u0085',
+    '.',
+    '..',
+    'a'.repeat(181),
+  ]) {
     await assert.rejects(
       data.readUploadedFile(session, 'private', name),
       /Invalid uploaded filename/,
@@ -269,15 +305,82 @@ test('binary uploads use app-specific unique filenames and preserve byte values'
   const { session, calls } = sessionFor()
   const bytes = new Uint8Array([0, 128, 255])
   const name = await data.uploadFileBytes(session, 'private', {
-    name: '../../<script>.bin',
+    name: 'café 100%.bin',
     size: bytes.length,
     arrayBuffer: async () => bytes.buffer,
   })
-  assert.match(name, /^[a-f0-9-]+-[a-zA-Z0-9._-]+$/)
+  assert.match(name, /^[a-f0-9-]+-café 100%\.bin$/)
   assert.equal(calls.puts[0].path, `/priv/template/attachments/${name}`)
   assert.deepEqual([...calls.puts[0].bytes], [...bytes])
   const downloaded = await data.readUploadedFile(session, 'private', name)
   assert.deepEqual([...downloaded], [...bytes])
+})
+
+test('uploads reject path separators, controls and dot segments before reading or writing', async () => {
+  const { session, calls } = sessionFor()
+  for (const name of [
+    '../secret',
+    'nested/file',
+    'nested\\file',
+    '.',
+    '..',
+    'line\nfeed',
+    '\u0085',
+  ]) {
+    await assert.rejects(
+      data.uploadFileBytes(session, 'private', {
+        name,
+        size: 1,
+        arrayBuffer: async () => assert.fail('Invalid names must not read the selected file.'),
+      }),
+      /Invalid uploaded filename/,
+    )
+  }
+  assert.deepEqual(calls.puts, [])
+})
+
+test('upload names remain bounded without splitting Unicode characters', async () => {
+  const { session } = sessionFor()
+  const name = await data.uploadFileBytes(
+    session,
+    'public',
+    new globalThis.File(['x'], '😀'.repeat(150)),
+  )
+  assert.equal(new globalThis.TextEncoder().encode(name).byteLength, 37 + 100)
+  assert.ok(name.endsWith('😀'.repeat(25)))
+  assert.doesNotThrow(() => data.uploadedFilePath('public', name))
+})
+
+test('attachment downloads preserve Unicode, spaces and literal percent ciphertext names', (t) => {
+  const previousDocument = globalThis.document
+  const previousWindow = globalThis.window
+  const links = []
+  globalThis.document = {
+    createElement() {
+      const link = { click() {}, remove() {} }
+      links.push(link)
+      return link
+    },
+    body: { append() {} },
+  }
+  globalThis.window = { setTimeout: () => 0 }
+  t.mock.method(URL, 'createObjectURL', (blob) => {
+    assert.equal(blob.type, 'application/octet-stream')
+    return 'blob:test-download'
+  })
+  try {
+    const name = 'original café 100%25.bin.pubkyenc'
+    downloads.downloadBytes(new Uint8Array([1, 2, 3]), name)
+    assert.equal(links[0].download, name)
+    assert.equal(links[0].href, 'blob:test-download')
+    downloads.downloadBytes(new Uint8Array(), '../nested\\file\u0000')
+    assert.equal(links[1].download, '.._nested_file_')
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document
+    else globalThis.document = previousDocument
+    if (previousWindow === undefined) delete globalThis.window
+    else globalThis.window = previousWindow
+  }
 })
 
 test('oversized uploads and view changes cannot initiate a write', async () => {

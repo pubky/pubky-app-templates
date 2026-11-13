@@ -1,11 +1,12 @@
 import type { Session } from '@synonymdev/pubky'
 import { version as pubkySdkVersion } from '@synonymdev/pubky/package.json'
-import { hasStorageAccess, requireStorageAccess } from './access'
-import { type StorageSpace } from './config'
+import { hasEncryptionAccess, hasStorageAccess, requireStorageAccess } from './access'
+import { APP_PATHS, type StorageSpace } from './config'
 import { pageNavigationHtml } from './navigation'
 import {
   isAuthorizeRingLink,
   authViewHtml,
+  ringPanelHtml,
   renderRingSigninQr,
   updateAuthorizeLink,
   updateCopyButton,
@@ -26,6 +27,7 @@ import { storageSpacesHtml } from './spaces-ui'
 import { downloadedUploadName } from './encryption'
 import { encryptionRecoveryPanelHtml, createEncryptionRecovery } from './encryption-recovery-ui'
 import { proofPanelHtml, createProofTools } from './proofs-ui'
+import { accountPanelHtml, createAccountTools } from './account-ui'
 import { createRingAuthAttempt, type RingAuthAttempt } from './ring-auth-lifecycle'
 import {
   copyTextToClipboard,
@@ -39,16 +41,20 @@ import {
   discardSession,
   getSavedSessionId,
   getSessionId,
+  getPendingPermissionAuth,
   hasPendingSessionCleanup,
   subscribeSavedSessionChanges,
   isRingAuthCanceled,
   isRingAuthExpired,
   restoreSavedSession,
+  retrySessionCleanup,
+  replaceSession,
   saveSession,
   signOut,
   signupDevelopmentUser,
   startRingAuthFlow,
   type RingAuthFlow,
+  type PermissionRequest,
 } from './pubky'
 import {
   acquireFileLock,
@@ -92,6 +98,8 @@ interface State {
   drafts: Partial<Record<StorageSpace, FileDraft>>
   ringAuthFlow?: RingAuthFlow
   ringSignin: RingSigninState
+  permissionRequest?: PermissionRequest
+  uploadDraft?: { file: File; encrypted: boolean }
   session?: Session
   stopEventStream?: () => Promise<void>
   eventStreamEvents: AppEvent[]
@@ -123,7 +131,8 @@ export function start(root: HTMLElement, page: 'files' | 'tools' = 'files') {
   app.addEventListener('submit', handleSubmit)
   app.addEventListener('change', (event) => {
     const input = event.target
-    if (input instanceof HTMLInputElement && input.name === 'write-mode') syncControls()
+    if (input instanceof HTMLInputElement && ['write-mode', 'encrypt-file'].includes(input.name))
+      syncControls()
   })
   subscribeSavedSessionChanges((change) => {
     // pageshow validates the saved session before unblocking a cached waiter.
@@ -192,7 +201,12 @@ async function init(drafts?: typeof suspendedDrafts) {
     }
   })
 
-  if (state.revision !== revision || state.session) return
+  if (state.revision !== revision) return
+  if (state.session) {
+    const pending = getPendingPermissionAuth(state.session)
+    if (pending) await refreshRingSignin(false, false, pending)
+    return
+  }
   mount()
   if (!needsSessionRecovery()) await refreshRingSignin(Boolean(state.error))
 }
@@ -223,6 +237,7 @@ function mount() {
   void renderRingSigninQr(state.ringSignin)
   syncControls()
   mountSessionTools()
+  restoreUploadDraft()
 }
 
 function signedInHeader(session: Session) {
@@ -237,17 +252,21 @@ function signedInHeader(session: Session) {
 function signedInViewHtml() {
   if (state.logoutPending)
     return '<p>Sign-out is pending. Retry to finish revoking this session before making more requests.</p>'
+  const permissions = permissionPanelHtml()
   if (currentPage === 'tools') {
     return `
+      ${permissions}
       <section class="grid">
+        ${accountPanelHtml(requireSession())}
         ${proofPanelHtml()}
         ${encryptionRecoveryPanelHtml(state.space)}
       </section>
     `
   }
   return `
+    ${permissions}
     ${storageSpacesHtml(state.space, state.busy)}
-    ${state.session && hasStorageAccess(state.session, state.space, 'r') && !hasStorageAccess(state.session, state.space) ? '<p class="muted">Read-only access to this folder. Sign out and authorize write access to edit files.</p>' : ''}
+    ${state.session && hasStorageAccess(state.session, state.space, 'r') && !hasStorageAccess(state.session, state.space) ? '<p class="muted">Read-only access to this folder. Expand Granted permissions and choose Request missing storage access to edit files.</p>' : ''}
     <section id="storage-workspace" class="grid">
       ${editorPanelHtml(state.files, state.editingId, state.space, state.busy, state.drafts[state.space], state.fileLock)}
       ${filesPanelHtml(state.files, state.space, state.busy, state.uploads)}
@@ -256,12 +275,59 @@ function signedInViewHtml() {
   `
 }
 
+function permissionPanelHtml() {
+  const session = requireSession()
+  const missingStorageAccess =
+    !hasStorageAccess(session, 'public') || !hasStorageAccess(session, 'private')
+  return `
+    <section class="panel permissions-panel">
+      <details><summary>Granted permissions</summary>
+        <p>Read (r), write (w), and encryption keys (e) are approved separately.</p>
+        <ul>${session.info.capabilities.map((capability) => `<li><code>${escapeHtml(capability)}</code></li>`).join('') || '<li>No capabilities approved.</li>'}</ul>
+        ${missingStorageAccess ? '<button id="authorize-storage-permissions" type="button">Request missing storage access</button>' : ''}
+      </details>
+      <div id="previous-grant-cleanup">${hasPendingSessionCleanup() ? '<p>Previous grant cleanup is pending. Your current authorization is active.</p><button id="retry-permission-cleanup" type="button">Retry previous grant cleanup</button>' : ''}</div>
+    </section>
+    <div id="permission-auth-slot">${permissionAuthHtml()}</div>
+  `
+}
+
+function permissionAuthHtml() {
+  if (!state.permissionRequest) return ''
+  return `${ringPanelHtml(state.ringSignin, state.busy)}
+    ${state.permissionRequest.encryptionSpace ? `<p>Requesting encryption keys for <code>${escapeHtml(APP_PATHS[state.permissionRequest.encryptionSpace])}attachments/</code>.</p>` : ''}
+    ${state.permissionRequest.account ? '<p>This request adds read access to /, including every public and private folder on this account.</p>' : ''}
+    <p>The current account stays active until the requested permissions are approved. Canceling keeps your existing access.</p>
+    <button id="cancel-permission-auth" type="button">Cancel authorization</button>`
+}
+
+function updatePermissionAuth() {
+  const slot = app.querySelector('#permission-auth-slot')
+  if (slot) slot.innerHTML = permissionAuthHtml()
+}
+
+function restoreUploadDraft() {
+  const draft = state.uploadDraft
+  const input = app.querySelector<HTMLInputElement>('#file-form input[name="file"]')
+  if (!draft || !input) return
+  const transfer = new DataTransfer()
+  transfer.items.add(draft.file)
+  input.files = transfer.files
+  const mode = app.querySelector<HTMLInputElement>('#file-form input[value="file"]')
+  const encrypted = app.querySelector<HTMLInputElement>('#file-form input[name="encrypt-file"]')
+  if (mode) mode.checked = true
+  if (encrypted) encrypted.checked = draft.encrypted
+  state.uploadDraft = undefined
+  syncControls()
+}
+
 function renderWorkspace() {
   disposeSessionTools()
   const view = app.querySelector('#view')
   if (view) view.innerHTML = signedInViewHtml()
   syncControls()
   mountSessionTools()
+  void renderRingSigninQr(state.ringSignin)
 }
 
 function disposeSessionTools() {
@@ -273,6 +339,8 @@ function mountSessionTools() {
   if (currentPage !== 'tools' || !state.session || state.logoutPending || pageSuspended) return
   const proofRoot = app.querySelector<HTMLElement>('#proof-tools')
   if (proofRoot) sessionTools.push(createProofTools(proofRoot, state.session))
+  const accountRoot = app.querySelector<HTMLElement>('#account-tools')
+  if (accountRoot) sessionTools.push(createAccountTools(accountRoot, state.session))
   const recoveryRoot = app.querySelector<HTMLElement>('#encryption-recovery')
   const id = getSessionId(state.session)
   if (recoveryRoot && id) {
@@ -301,8 +369,8 @@ function updateStatus() {
 function canUseAuthorizationUrl() {
   const { authorizationUrl, expired, loading } = state.ringSignin
   return (
-    !state.session &&
-    !needsSessionRecovery() &&
+    (!state.session || Boolean(state.permissionRequest)) &&
+    (Boolean(state.session) || !needsSessionRecovery()) &&
     !state.busy &&
     Boolean(authorizationUrl) &&
     !loading &&
@@ -321,13 +389,16 @@ function syncControls() {
   )?.value
 
   for (const button of app.querySelectorAll('button')) {
-    if (button.closest('#proof-tools, #encryption-recovery')) continue
+    if (button.closest('#proof-tools, #encryption-recovery, #account-tools')) continue
     if (button.type === 'submit' && button.closest('#file-form')) {
       button.disabled =
         busy ||
         !canAccess ||
         !['note', 'file'].includes(writeMode ?? '') ||
-        (writeMode === 'note' && Boolean(state.editingId && !state.fileLock))
+        (writeMode === 'note' && Boolean(state.editingId && !state.fileLock)) ||
+        (writeMode === 'file' &&
+          Boolean(app.querySelector<HTMLInputElement>('[name="encrypt-file"]')?.checked) &&
+          Boolean(state.session && !hasEncryptionAccess(state.session, state.space)))
       continue
     }
     switch (button.id) {
@@ -362,6 +433,11 @@ function syncControls() {
   }
   const fileInput = app.querySelector<HTMLInputElement>('#file-form input[name="file"]')
   if (fileInput) fileInput.required = writeMode === 'file'
+  const authorization = app.querySelector<HTMLElement>('#encryption-authorization')
+  if (authorization)
+    authorization.hidden =
+      !app.querySelector<HTMLInputElement>('[name="encrypt-file"]')?.checked ||
+      Boolean(state.session && hasEncryptionAccess(state.session, state.space))
 
   updateAuthorizeLink(canUse, state.ringSignin.authorizationUrl)
 }
@@ -421,7 +497,30 @@ function handleClick(event: MouseEvent) {
       void init()
       break
     case 'refresh-ring-signin':
-      void refreshRingSignin(false, true)
+      void refreshRingSignin(false, true, state.permissionRequest)
+      break
+    case 'authorize-encryption':
+      void refreshRingSignin(false, true, { encryptionSpace: state.space })
+      break
+    case 'authorize-storage-permissions':
+      void refreshRingSignin(false, true, {})
+      break
+    case 'authorize-account-permissions':
+      void refreshRingSignin(false, true, { account: true })
+      break
+    case 'cancel-permission-auth':
+      cancelRingSignin()
+      updatePermissionAuth()
+      setNotice('Authorization canceled. Existing access is unchanged.')
+      updateStatus()
+      syncControls()
+      break
+    case 'retry-permission-cleanup':
+      void run('Retrying previous grant cleanup...', async () => {
+        await retrySessionCleanup()
+        app.querySelector('#previous-grant-cleanup')?.replaceChildren()
+        setNotice('Previous grant cleanup completed.')
+      })
       break
     case 'copy-authorization-url':
       void handleCopyAuthorizationUrl()
@@ -479,25 +578,43 @@ function handleSubmit(event: SubmitEvent) {
   }
 }
 
-async function refreshRingSignin(preserveError = false, fresh = false) {
-  if (state.session || needsSessionRecovery()) return
+async function refreshRingSignin(
+  preserveError = false,
+  fresh = false,
+  request?: PermissionRequest,
+) {
+  const previous = state.session
+  if ((previous && !request) || (!previous && needsSessionRecovery())) return
   const token = Symbol('ring-signin')
   cancelRingSignin()
+  state.permissionRequest = request
+  const heading = previous
+    ? request?.encryptionSpace
+      ? 'Authorize encrypted uploads'
+      : request?.account
+        ? 'Authorize account inspection'
+        : 'Request missing storage access'
+    : undefined
 
   state.ringSignin = {
     loading: true,
     token,
+    heading,
   }
   const attempt = createRingAuthAttempt(getSavedSessionId, () => isActiveRingSignin(token))
   if (pageSuspended) attempt.pause()
   ringAttempt = attempt
   if (!preserveError) state.error = undefined
   updateStatus()
+  updatePermissionAuth()
   updateRingPanel(state.ringSignin, state.busy)
   syncControls()
 
   try {
-    const flow = await startRingAuthFlow({ fresh }, attempt.isCurrent)
+    const flow = await startRingAuthFlow(
+      { fresh, ...(previous ? { session: previous, ...request } : {}) },
+      attempt.isCurrent,
+    )
     if (!attempt.isCurrent()) {
       flow.cancel()
       return
@@ -507,16 +624,17 @@ async function refreshRingSignin(preserveError = false, fresh = false) {
     state.ringSignin = {
       authorizationUrl: flow.authorizationUrl,
       token,
+      heading,
     }
     updateRingPanel(state.ringSignin, state.busy)
     syncControls()
 
-    void handleRingApproval(flow, token, attempt)
+    void handleRingApproval(flow, token, attempt, previous, request)
   } catch (error) {
     if (!(await attempt.waitUntilVisible())) return
 
     state.ringAuthFlow = undefined
-    state.ringSignin = {}
+    state.ringSignin = { heading }
     setError(error)
     updateStatus()
     updateRingPanel(state.ringSignin, state.busy)
@@ -524,7 +642,13 @@ async function refreshRingSignin(preserveError = false, fresh = false) {
   }
 }
 
-async function handleRingApproval(flow: RingAuthFlow, token: symbol, attempt: RingAuthAttempt) {
+async function handleRingApproval(
+  flow: RingAuthFlow,
+  token: symbol,
+  attempt: RingAuthAttempt,
+  previous?: Session,
+  request?: PermissionRequest,
+) {
   try {
     const session = await flow.awaitApproval
     if (!(await attempt.waitUntilVisible())) {
@@ -534,26 +658,78 @@ async function handleRingApproval(flow: RingAuthFlow, token: symbol, attempt: Ri
 
     state.ringAuthFlow = undefined
     const revision = state.revision
-    await run('Completing Pubky Ring sign-in...', async () => {
-      let selected: boolean
-      try {
-        selected = await saveSession(
+    await run(
+      previous ? 'Updating permissions...' : 'Completing Pubky Ring sign-in...',
+      async () => {
+        let selected: boolean
+        try {
+          if (previous) {
+            const isCurrent = () =>
+              !state.logoutPending &&
+              state.session === previous &&
+              state.revision === revision &&
+              attempt.isCurrent()
+            selected = await replaceSession(
+              previous,
+              session,
+              request ?? {},
+              isCurrent,
+              async () => {
+                if (!(await attempt.waitUntilVisible()) || !isCurrent()) return
+                // Keep the workspace intact until the replacement is validated and saved.
+                captureDraft()
+                const file = app.querySelector<HTMLInputElement>('#file-form input[name="file"]')
+                  ?.files?.[0]
+                if (file)
+                  state.uploadDraft = {
+                    file,
+                    encrypted: Boolean(
+                      app.querySelector<HTMLInputElement>('[name="encrypt-file"]')?.checked,
+                    ),
+                  }
+                await stopEventStream()
+                if (!isCurrent()) return
+                await stopEventHistory()
+                if (!isCurrent()) return
+                await releaseEditorLock()
+              },
+            )
+          } else
+            selected = await saveSession(
+              session,
+              () => state.revision === revision && attempt.isCurrent(),
+              attempt.waitUntilVisible,
+            )
+        } catch (error) {
+          if (await attempt.waitUntilVisible()) throw error
+          return
+        }
+        if (!selected || state.revision !== revision || !isActiveRingSignin(token)) return
+        const drafts = previous
+          ? { sessionId: getSessionId(session)!, space: state.space, drafts: state.drafts }
+          : undefined
+        await activateSession(
           session,
-          () => state.revision === revision && attempt.isCurrent(),
-          attempt.waitUntilVisible,
+          previous ? 'Permissions updated.' : 'Signed in with Pubky Ring.',
+          drafts,
         )
-      } catch (error) {
-        if (await attempt.waitUntilVisible()) throw error
-        return
-      }
-      if (!selected || state.revision !== revision || !isActiveRingSignin(token)) return
-      await activateSession(session, 'Signed in with Pubky Ring.')
-    })
+      },
+    )
+    if (previous && state.session === previous && isActiveRingSignin(token)) {
+      state.uploadDraft = undefined
+      state.ringSignin = { expired: true, token, heading: 'Authorize again with Pubky Ring' }
+      updateRingPanel(state.ringSignin, state.busy)
+      syncControls()
+    }
   } catch (error) {
     if (isRingAuthCanceled(error) || !(await attempt.waitUntilVisible())) return
 
     state.ringAuthFlow = undefined
-    state.ringSignin = isRingAuthExpired(error) ? { expired: true, token } : {}
+    state.ringSignin = {
+      expired: isRingAuthExpired(error),
+      token,
+      heading: previous ? 'Authorize again with Pubky Ring' : undefined,
+    }
     setError(error)
     updateStatus()
     updateRingPanel(state.ringSignin, state.busy)
@@ -716,6 +892,8 @@ async function handleSignOut() {
   const session = state.session
   if (!session) return
   state.logoutPending = true
+  // A late permission approval must never replace a session being signed out.
+  cancelRingSignin()
   state.files = []
   state.uploads = []
   state.drafts = {}
@@ -905,6 +1083,7 @@ function cancelRingSignin() {
   const flow = state.ringAuthFlow
   state.ringAuthFlow = undefined
   state.ringSignin = {}
+  state.permissionRequest = undefined
   ringAttempt?.cancel()
   ringAttempt = undefined
   flow?.cancel()
@@ -973,6 +1152,7 @@ function resetWorkspace() {
   void stopEventHistory()
   void releaseEditorLock()
   state.session = undefined
+  state.uploadDraft = undefined
   state.logoutPending = false
   state.files = []
   state.uploads = []
