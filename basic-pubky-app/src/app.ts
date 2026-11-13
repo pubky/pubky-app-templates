@@ -664,29 +664,35 @@ async function handleRingApproval(
         let selected: boolean
         try {
           if (previous) {
-            captureDraft()
-            const file = app.querySelector<HTMLInputElement>('#file-form input[name="file"]')
-              ?.files?.[0]
-            if (file)
-              state.uploadDraft = {
-                file,
-                encrypted: Boolean(
-                  app.querySelector<HTMLInputElement>('[name="encrypt-file"]')?.checked,
-                ),
-              }
-            await stopEventStream()
-            await stopEventHistory()
-            await releaseEditorLock()
+            const isCurrent = () =>
+              !state.logoutPending &&
+              state.session === previous &&
+              state.revision === revision &&
+              attempt.isCurrent()
             selected = await replaceSession(
               previous,
               session,
               request ?? {},
-              () =>
-                !state.logoutPending &&
-                state.session === previous &&
-                state.revision === revision &&
-                attempt.isCurrent(),
-              attempt.waitUntilVisible,
+              isCurrent,
+              async () => {
+                if (!(await attempt.waitUntilVisible()) || !isCurrent()) return
+                // Keep the workspace intact until the replacement is validated and saved.
+                captureDraft()
+                const file = app.querySelector<HTMLInputElement>('#file-form input[name="file"]')
+                  ?.files?.[0]
+                if (file)
+                  state.uploadDraft = {
+                    file,
+                    encrypted: Boolean(
+                      app.querySelector<HTMLInputElement>('[name="encrypt-file"]')?.checked,
+                    ),
+                  }
+                await stopEventStream()
+                if (!isCurrent()) return
+                await stopEventHistory()
+                if (!isCurrent()) return
+                await releaseEditorLock()
+              },
             )
           } else
             selected = await saveSession(

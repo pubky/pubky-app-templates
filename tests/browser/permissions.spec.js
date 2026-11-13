@@ -5,10 +5,10 @@ const owner = '8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo'
 const initialId = 'browser-test:template'
 const storageCaps = ['/pub/template/:rw', '/priv/template/:rw']
 
-async function openApp(page, { signedIn = true, capabilities = storageCaps } = {}) {
+async function openApp(page, { signedIn = true, capabilities = storageCaps, files = {} } = {}) {
   await page.addInitScript(
-    ({ signedIn, capabilities, initialId }) => {
-      globalThis.__pubkySeed = { capabilities }
+    ({ signedIn, capabilities, files, initialId }) => {
+      globalThis.__pubkySeed = { capabilities, files }
       if (globalThis.sessionStorage.getItem('test-initialized')) return
       globalThis.sessionStorage.setItem('test-initialized', 'true')
       if (signedIn) {
@@ -16,7 +16,7 @@ async function openApp(page, { signedIn = true, capabilities = storageCaps } = {
         globalThis.localStorage.setItem('test-sdk-records', JSON.stringify([initialId]))
       }
     },
-    { signedIn, capabilities, initialId },
+    { signedIn, capabilities, files, initialId },
   )
   await page.goto('/')
   await expect(page.locator(signedIn ? '#sign-out' : '#authorize-ring')).toBeVisible()
@@ -300,6 +300,93 @@ test('declining encryption keys preserves the previous grant and never uploads p
     ),
   ).toEqual([])
 })
+
+for (const failure of ['incomplete approval', 'failure to save the approved session']) {
+  test(`${failure} preserves the current live stream and editor lock`, async ({ page }) => {
+    const notePath = '/pub/template/files/existing.json'
+    const body = 'Keep this unsaved note through the permission request'
+    await openApp(page, {
+      files: {
+        [notePath]: {
+          json: {
+            title: 'Existing note',
+            body: 'Saved body',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        },
+      },
+    })
+    await page.getByRole('button', { name: 'Lock & edit', exact: true }).click()
+    await page.locator('textarea[name="body"]').fill(body)
+    await page.getByRole('button', { name: 'Start live', exact: true }).click()
+    await expect(page.locator('#toggle-event-stream')).toHaveText('Stop live')
+    const liveIndex = await page.evaluate(() =>
+      globalThis.__pubkyTest.subscriptions.findIndex((subscription) => subscription.options.live),
+    )
+    expect(liveIndex).toBeGreaterThanOrEqual(0)
+
+    await selectEncryptedUpload(page, 'keep-selected.bin')
+    await beginEncryptionAuthorization(page)
+    if (failure === 'incomplete approval') {
+      await approve(page, 'declined-with-active-workspace', { capabilities: storageCaps })
+      await expect(page.locator('#status')).toContainText('Encryption access was not approved')
+    } else {
+      await page.evaluate(() => {
+        globalThis.__pubkyTest.failures['sessions.save'] = 'Saving the new session failed'
+      })
+      await approve(page, 'unsaved-approved-session')
+      await expect(page.locator('#status')).toContainText('Saving the new session failed')
+    }
+
+    expect(await selectedId(page)).toBe(initialId)
+    expect(
+      await page.evaluate(
+        (index) => globalThis.__pubkyTest.subscriptions[index].canceled,
+        liveIndex,
+      ),
+    ).toBe(false)
+    expect(
+      await page.evaluate(
+        () =>
+          globalThis.__pubkyTest.subscriptions.filter(
+            (subscription) => subscription.options.live && !subscription.canceled,
+          ).length,
+      ),
+    ).toBe(1)
+    await expect(page.locator('#toggle-event-stream')).toHaveText('Stop live')
+    expect(
+      await page.evaluate(() =>
+        globalThis.__pubkyTest.calls.filter((call) => call.method === 'unlock'),
+      ),
+    ).toEqual([])
+    expect(
+      await page.locator('#file-form input[type="file"]').evaluate((input) => input.files[0].name),
+    ).toBe('keep-selected.bin')
+
+    await page.evaluate(() => {
+      globalThis.__pubkyTest.emitEvent({
+        cursor: '3',
+        path: '/pub/template/files/after-permission-request.json',
+      })
+    })
+    await expect(page.locator('#event-list')).toContainText('after-permission-request.json')
+    await page.getByLabel('Write a file', { exact: true }).check()
+    await expect(page.locator('textarea[name="body"]')).toHaveValue(body)
+    await expect(page.locator('#file-form button[type="submit"]')).toBeEnabled()
+    await page.locator('#renew-file-lock').click()
+    await expect(page.locator('#status')).toContainText('File lock renewed.')
+    await page.locator('#file-form button[type="submit"]').click()
+    await expect(page.locator('#status')).toContainText('File saved:')
+    expect(
+      await page.evaluate((path) => globalThis.__pubkyTest.files[path].json.body, notePath),
+    ).toBe(body)
+    expect(
+      await page.evaluate(() =>
+        globalThis.__pubkyTest.calls.filter((call) => call.method === 'lock'),
+      ),
+    ).toEqual([{ method: 'lock', path: notePath }])
+  })
+}
 
 test('a pending permission request resumes for the same identity after reload', async ({
   page,
