@@ -266,7 +266,7 @@ function signedInViewHtml() {
   return `
     ${permissions}
     ${storageSpacesHtml(state.space, state.busy)}
-    ${state.session && hasStorageAccess(state.session, state.space, 'r') && !hasStorageAccess(state.session, state.space) ? '<p class="muted">Read-only access to this folder. Authorize storage access again to request write access.</p>' : ''}
+    ${state.session && hasStorageAccess(state.session, state.space, 'r') && !hasStorageAccess(state.session, state.space) ? '<p class="muted">Read-only access to this folder. Expand Granted permissions and choose Request missing storage access to edit files.</p>' : ''}
     <section id="storage-workspace" class="grid">
       ${editorPanelHtml(state.files, state.editingId, state.space, state.busy, state.drafts[state.space], state.fileLock)}
       ${filesPanelHtml(state.files, state.space, state.busy, state.uploads)}
@@ -277,12 +277,14 @@ function signedInViewHtml() {
 
 function permissionPanelHtml() {
   const session = requireSession()
+  const missingStorageAccess =
+    !hasStorageAccess(session, 'public') || !hasStorageAccess(session, 'private')
   return `
     <section class="panel permissions-panel">
       <details><summary>Granted permissions</summary>
         <p>Read (r), write (w), and encryption keys (e) are approved separately. Receiving keys cannot be undone by revoking a grant.</p>
         <ul>${session.info.capabilities.map((capability) => `<li><code>${escapeHtml(capability)}</code></li>`).join('') || '<li>No capabilities approved.</li>'}</ul>
-        <button id="authorize-storage-permissions" type="button">Authorize storage access again</button>
+        ${missingStorageAccess ? '<button id="authorize-storage-permissions" type="button">Request missing storage access</button>' : ''}
       </details>
       <div id="previous-grant-cleanup">${hasPendingSessionCleanup() ? '<p>Previous grant cleanup is pending. Your current authorization is active.</p><button id="retry-permission-cleanup" type="button">Retry previous grant cleanup</button>' : ''}</div>
     </section>
@@ -591,7 +593,7 @@ async function refreshRingSignin(
       ? 'Authorize encrypted uploads'
       : request?.account
         ? 'Authorize account inspection'
-        : 'Authorize storage access again'
+        : 'Request missing storage access'
     : undefined
 
   state.ringSignin = {

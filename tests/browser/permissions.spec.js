@@ -80,6 +80,70 @@ test('initial authorization requests only folder storage access and no chosen id
   expect(await requests(page)).toHaveLength(1)
 })
 
+test('full folder access hides the storage permission request even without encryption keys', async ({
+  page,
+}) => {
+  await openApp(page)
+  await page.getByText('Granted permissions', { exact: true }).click()
+  await expect(page.locator('#authorize-storage-permissions')).toHaveCount(0)
+  await selectEncryptedUpload(page)
+  await expect(page.locator('#authorize-encryption')).toBeVisible()
+  await expect(page.locator('#authorize-storage-permissions')).toHaveCount(0)
+})
+
+test('root read and write access also hides the storage permission request', async ({ page }) => {
+  await openApp(page, { capabilities: ['/:rw'] })
+  await page.getByText('Granted permissions', { exact: true }).click()
+  await expect(page.locator('#authorize-storage-permissions')).toHaveCount(0)
+})
+
+test('missing folder access offers a collapsed request that disappears after complete approval', async ({
+  page,
+}) => {
+  await openApp(page, { capabilities: ['/pub/template/:rw'] })
+  const button = page.locator('#authorize-storage-permissions')
+  await expect(button).toHaveCount(1)
+  await expect(button).toBeHidden()
+  await page.getByText('Granted permissions', { exact: true }).click()
+  await expect(button).toHaveText('Request missing storage access')
+  await button.click()
+  await expect(page.locator('#permission-auth-slot #authorize-ring')).toHaveAttribute(
+    'href',
+    /pubkyring:/,
+  )
+  const [request] = await requests(page)
+  expect(request.expectedSigner).toBe(owner)
+  expect(new Set(request.capabilities.split(','))).toEqual(new Set(storageCaps))
+  await approve(page, 'complete-storage-access')
+  await expect(page.locator('#status')).toContainText('Permissions updated.')
+  expect(await selectedId(page)).toBe('complete-storage-access')
+  await page.getByText('Granted permissions', { exact: true }).click()
+  await expect(button).toHaveCount(0)
+})
+
+test('read-only and file-scoped access retain the storage request when broader access is declined', async ({
+  page,
+}) => {
+  const limitedCapabilities = ['/pub/template/:r', '/priv/template/attachments/existing.bin:rw']
+  await openApp(page, { capabilities: limitedCapabilities })
+  const button = page.locator('#authorize-storage-permissions')
+  await expect(button).toBeHidden()
+  await page.getByText('Granted permissions', { exact: true }).click()
+  await expect(button).toBeVisible()
+  await button.click()
+  await expect(page.locator('#permission-auth-slot #authorize-ring')).toHaveAttribute(
+    'href',
+    /pubkyring:/,
+  )
+  await approve(page, 'declined-storage-access', { capabilities: limitedCapabilities })
+  await expect(page.locator('#status')).toContainText('Storage access was not fully approved')
+  expect(await selectedId(page)).toBe(initialId)
+  await expect(button).toBeVisible()
+  expect(
+    await page.evaluate(() => JSON.parse(globalThis.localStorage.getItem('test-sdk-records'))),
+  ).toEqual([initialId])
+})
+
 test('same-account encryption approval retains the selected file and supports special-name offline recovery', async ({
   page,
 }) => {
