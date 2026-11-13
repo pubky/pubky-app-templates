@@ -282,7 +282,7 @@ function permissionPanelHtml() {
   return `
     <section class="panel permissions-panel">
       <details><summary>Granted permissions</summary>
-        <p>Read (r), write (w), and encryption keys (e) are approved separately. Receiving keys cannot be undone by revoking a grant.</p>
+        <p>Read (r), write (w), and encryption keys (e) are approved separately.</p>
         <ul>${session.info.capabilities.map((capability) => `<li><code>${escapeHtml(capability)}</code></li>`).join('') || '<li>No capabilities approved.</li>'}</ul>
         ${missingStorageAccess ? '<button id="authorize-storage-permissions" type="button">Request missing storage access</button>' : ''}
       </details>
