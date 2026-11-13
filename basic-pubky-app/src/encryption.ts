@@ -1,5 +1,6 @@
 import type { EncryptionKeys, Path, Session } from '@synonymdev/pubky'
 import { APP_PATHS, type StorageSpace } from './config'
+import { isUploadFilename } from './upload-filename'
 
 export const ENCRYPTED_FILE_SUFFIX = '.pubkyenc'
 // Template envelope v1: magic/version, 96-bit IV, AES-GCM ciphertext and 128-bit tag.
@@ -134,7 +135,7 @@ function validateUploadPath(path: Path) {
   const directory = Object.values(APP_PATHS)
     .map((prefix) => `${prefix}attachments/`)
     .find((prefix) => path.startsWith(prefix))
-  if (!directory || !/^[a-zA-Z0-9_-][a-zA-Z0-9._-]*$/.test(path.slice(directory.length))) {
+  if (!directory || !isUploadFilename(path.slice(directory.length))) {
     throw new Error('Encryption is available only for files in this app’s upload folders.')
   }
 }

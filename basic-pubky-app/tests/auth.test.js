@@ -125,12 +125,7 @@ test('Ring sign-in requests only the public and private template capabilities', 
   t.after(() => kind.free())
   assert.deepEqual(
     new Set(validateCapabilities(capabilities).split(',')),
-    new Set([
-      '/pub/template/:rw',
-      '/priv/template/:rw',
-      '/pub/template/attachments/:e',
-      '/priv/template/attachments/:e',
-    ]),
+    new Set(['/pub/template/:rw', '/priv/template/:rw']),
   )
   assert.equal(kind.intent, 'signin')
   assert.deepEqual(options, {
@@ -948,4 +943,289 @@ test('development identity creation is rejected before any SDK call when disable
   } finally {
     await disabledServer.close()
   }
+})
+
+function permissionSession(t, id, capabilities, scopes = [], identity = 'same-account') {
+  return {
+    testId: id,
+    info: { publicKey: { z32: () => identity }, capabilities },
+    get grant() {
+      return { encryptionKeys: { scopes, free() {} }, free() {} }
+    },
+    signout: t.mock.fn(async () => {}),
+    free() {},
+  }
+}
+
+function permissionStore(t, sessions) {
+  t.mock.method(BrowserSessionStore.prototype, 'save', async (session) => record(session.testId))
+  t.mock.method(BrowserSessionStore.prototype, 'restore', async (id) => {
+    const session = sessions.find((item) => item.testId === id)
+    if (!session) throw sdkError('ClientStateError', `Stored Pubky session not found: ${id}`)
+    return session
+  })
+}
+
+const ordinaryCapabilities = ['/pub/template/:rw', '/priv/template/:rw']
+const publicEncryption = '/pub/template/attachments/:e'
+const privateEncryption = '/priv/template/attachments/:e'
+
+test('reauthorization requires the requested storage access instead of accepting unchanged partial approval', async (t) => {
+  const capabilities = ['/pub/template/:r']
+  const previous = permissionSession(t, 'previous:grant', capabilities)
+  const candidate = permissionSession(t, 'new:grant', capabilities)
+  permissionStore(t, [previous, candidate])
+  await auth.saveSession(previous)
+  await assert.rejects(
+    auth.replaceSession(previous, candidate),
+    /Storage access was not fully approved/,
+  )
+  assert.equal(auth.getSavedSessionId(), previous.testId)
+  assert.equal(previous.signout.mock.callCount(), 0)
+  assert.equal(candidate.signout.mock.callCount(), 1)
+})
+
+test('encryption approval also requires write access to its selected storage folder', async (t) => {
+  const capabilities = ['/pub/template/:r']
+  const previous = permissionSession(t, 'previous:grant', capabilities)
+  const candidate = permissionSession(
+    t,
+    'new:grant',
+    [...capabilities, publicEncryption],
+    ['/pub/template/attachments/'],
+  )
+  permissionStore(t, [previous, candidate])
+  await auth.saveSession(previous)
+  await assert.rejects(
+    auth.replaceSession(previous, candidate, { encryptionSpace: 'public' }),
+    /Storage access for the upload folder was not approved/,
+  )
+  assert.equal(auth.getSavedSessionId(), previous.testId)
+  assert.equal(previous.signout.mock.callCount(), 0)
+  assert.equal(candidate.signout.mock.callCount(), 1)
+})
+
+test('reusing the same stored grant is refused without revoking the selected session', async (t) => {
+  const previous = permissionSession(t, 'same:grant', ordinaryCapabilities)
+  const candidate = permissionSession(t, 'same:grant', ordinaryCapabilities)
+  permissionStore(t, [previous, candidate])
+  await auth.saveSession(previous)
+  await assert.rejects(auth.replaceSession(previous, candidate), /Authorize a new grant/)
+  assert.equal(auth.getSavedSessionId(), previous.testId)
+  assert.equal(previous.signout.mock.callCount(), 0)
+  assert.equal(candidate.signout.mock.callCount(), 0)
+  assert.equal(auth.hasPendingSessionCleanup(), false)
+})
+
+test('encryption reauthorization binds the identity and preserves earlier approved scopes', async (t) => {
+  const previous = permissionSession(
+    t,
+    'previous:grant',
+    [...ordinaryCapabilities, publicEncryption],
+    ['/pub/template/attachments/'],
+  )
+  permissionStore(t, [previous])
+  await auth.saveSession(previous)
+  const sdkFlow = fakeFlow(t, deferred().promise)
+  const start = t.mock.method(auth.pubky, 'startGrantAuthFlow', async () => sdkFlow)
+  const flow = await auth.startRingAuthFlow({ session: previous, encryptionSpace: 'private' })
+  const [capabilities, kind, options] = start.mock.calls[0].arguments
+  t.after(() => kind.free())
+  assert.deepEqual(
+    new Set(capabilities.split(',')),
+    new Set([...ordinaryCapabilities, publicEncryption, privateEncryption]),
+  )
+  assert.equal(options.expectedSigner, 'same-account')
+  assert.deepEqual(auth.getPendingPermissionAuth(previous), { encryptionSpace: 'private' })
+  flow.suspend()
+  await assert.rejects(flow.awaitApproval, { name: 'RingAuthCanceled' })
+  const saved = pending.entries()
+  const resume = t.mock.method(auth.pubky, 'resumeDelegatedGrantAuthFlow', async () =>
+    fakeFlow(t, deferred().promise),
+  )
+  const resumed = await auth.startRingAuthFlow({ session: previous, encryptionSpace: 'private' })
+  assert.equal(resume.mock.callCount(), 1)
+  assert.deepEqual(pending.entries(), saved)
+  resumed.cancel()
+  await assert.rejects(resumed.awaitApproval)
+  assert.equal(auth.getSavedSessionId(), previous.testId)
+  assert.equal(previous.signout.mock.callCount(), 0)
+})
+
+test('account inspection requests root read explicitly and without root write', async (t) => {
+  const previous = permissionSession(t, 'previous:grant', ordinaryCapabilities)
+  permissionStore(t, [previous])
+  await auth.saveSession(previous)
+  const start = t.mock.method(auth.pubky, 'startGrantAuthFlow', async () =>
+    fakeFlow(t, deferred().promise),
+  )
+  const flow = await auth.startRingAuthFlow({ session: previous, account: true })
+  const [capabilities, kind, options] = start.mock.calls[0].arguments
+  t.after(() => kind.free())
+  assert.deepEqual(new Set(capabilities.split(',')), new Set([...ordinaryCapabilities, '/:r']))
+  assert.equal(options.expectedSigner, 'same-account')
+  assert.deepEqual(auth.getPendingPermissionAuth(previous), { account: true })
+  flow.cancel()
+})
+
+test('permission authorization cannot resume an initial-signin link or a different selected grant', async (t) => {
+  const previous = permissionSession(t, 'previous:grant', ordinaryCapabilities)
+  permissionStore(t, [previous])
+  await auth.saveSession(previous)
+  pending.setItem(
+    'template:session:pending-auth',
+    JSON.stringify({ mode: 'delegated', state: 'old-signin-state' }),
+  )
+  const resume = t.mock.method(auth.pubky, 'resumeDelegatedGrantAuthFlow', async () =>
+    fakeFlow(t, deferred().promise),
+  )
+  const start = t.mock.method(auth.pubky, 'startGrantAuthFlow', async () =>
+    fakeFlow(t, deferred().promise),
+  )
+  const flow = await auth.startRingAuthFlow({ session: previous, encryptionSpace: 'public' })
+  assert.equal(resume.mock.callCount(), 0)
+  assert.equal(start.mock.callCount(), 1)
+  flow.suspend()
+  local.setItem('template:session', 'other:grant')
+  assert.equal(auth.getPendingPermissionAuth(previous), undefined)
+  await assert.rejects(auth.startRingAuthFlow({ session: previous, encryptionSpace: 'public' }), {
+    name: 'RingAuthCanceled',
+  })
+  assert.equal(resume.mock.callCount(), 0)
+})
+
+test('an initial sign-in cannot resume an account-bound permission request', async (t) => {
+  const previous = permissionSession(t, 'previous:grant', ordinaryCapabilities)
+  permissionStore(t, [previous])
+  await auth.saveSession(previous)
+  const start = t.mock.method(auth.pubky, 'startGrantAuthFlow', async () =>
+    fakeFlow(t, deferred().promise),
+  )
+  const upgrade = await auth.startRingAuthFlow({ session: previous, encryptionSpace: 'public' })
+  upgrade.suspend()
+  local.removeItem('template:session')
+  const resume = t.mock.method(auth.pubky, 'resumeDelegatedGrantAuthFlow', async () => fakeFlow(t))
+  const signin = await auth.startRingAuthFlow()
+  assert.equal(start.mock.callCount(), 2)
+  assert.equal(resume.mock.callCount(), 0)
+  assert.equal(start.mock.calls[1].arguments[2].expectedSigner, undefined)
+  signin.cancel()
+})
+
+test('successful permission replacement queues old revocation before selecting the new record', async (t) => {
+  const previous = permissionSession(t, 'previous:grant', ordinaryCapabilities)
+  const candidate = permissionSession(
+    t,
+    'new:grant',
+    [...ordinaryCapabilities, publicEncryption],
+    ['/pub/template/attachments/'],
+  )
+  permissionStore(t, [previous, candidate])
+  await auth.saveSession(previous)
+  const set = local.setItem
+  t.mock.method(local, 'setItem', (key, value) => {
+    if (key === 'template:session' && value === candidate.testId)
+      assert.equal(local.getItem('template:session:pending-revocation:previous:grant'), 'replaced')
+    set(key, value)
+  })
+  assert.equal(await auth.replaceSession(previous, candidate, { encryptionSpace: 'public' }), true)
+  assert.equal(auth.getSavedSessionId(), candidate.testId)
+  assert.equal(previous.signout.mock.callCount(), 1)
+  assert.equal(candidate.signout.mock.callCount(), 0)
+  assert.equal(auth.hasPendingSessionCleanup(), false)
+})
+
+for (const scenario of [
+  'different identity',
+  'declined encryption',
+  'lost storage access',
+  'lost existing keys',
+  'declined account',
+]) {
+  test(`partial approval keeps the old session: ${scenario}`, async (t) => {
+    const oldCaps = [...ordinaryCapabilities, publicEncryption]
+    const previous = permissionSession(t, 'previous:grant', oldCaps, ['/pub/template/attachments/'])
+    const newCaps =
+      scenario === 'lost storage access'
+        ? ['/pub/template/:rw', publicEncryption, privateEncryption]
+        : [...oldCaps, privateEncryption]
+    const newScopes =
+      scenario === 'declined encryption'
+        ? ['/pub/template/attachments/']
+        : scenario === 'lost existing keys'
+          ? ['/priv/template/attachments/']
+          : ['/pub/template/attachments/', '/priv/template/attachments/']
+    const candidate = permissionSession(
+      t,
+      'new:grant',
+      newCaps,
+      newScopes,
+      scenario === 'different identity' ? 'other-account' : 'same-account',
+    )
+    permissionStore(t, [previous, candidate])
+    await auth.saveSession(previous)
+    await assert.rejects(
+      auth.replaceSession(
+        previous,
+        candidate,
+        scenario === 'declined account' ? { account: true } : { encryptionSpace: 'private' },
+      ),
+      /current session was kept/,
+    )
+    assert.equal(auth.getSavedSessionId(), previous.testId)
+    assert.equal(previous.signout.mock.callCount(), 0)
+    assert.equal(candidate.signout.mock.callCount(), 1)
+  })
+}
+
+test("stale permission approval cannot replace another tab's selected grant", async (t) => {
+  const previous = permissionSession(t, 'previous:grant', ordinaryCapabilities)
+  const candidate = permissionSession(
+    t,
+    'new:grant',
+    [...ordinaryCapabilities, publicEncryption],
+    ['/pub/template/attachments/'],
+  )
+  permissionStore(t, [previous, candidate])
+  await auth.saveSession(previous)
+  const stored = deferred()
+  const saving = deferred()
+  t.mock.method(BrowserSessionStore.prototype, 'save', () => {
+    saving.resolve()
+    return stored.promise
+  })
+  const replace = auth.replaceSession(previous, candidate, { encryptionSpace: 'public' })
+  await saving.promise
+  local.setItem('template:session', 'other:grant')
+  stored.resolve(record(candidate.testId))
+  assert.equal(await replace, false)
+  assert.equal(auth.getSavedSessionId(), 'other:grant')
+  assert.equal(previous.signout.mock.callCount(), 0)
+  assert.equal(candidate.signout.mock.callCount(), 1)
+})
+
+test('failed old-grant cleanup remains retryable without blocking the new session after reload', async (t) => {
+  const previous = permissionSession(t, 'previous:grant', ordinaryCapabilities)
+  const candidate = permissionSession(
+    t,
+    'new:grant',
+    [...ordinaryCapabilities, publicEncryption],
+    ['/pub/template/attachments/'],
+  )
+  permissionStore(t, [previous, candidate])
+  await auth.saveSession(previous)
+  let offline = true
+  t.mock.method(previous, 'signout', async () => {
+    if (offline) throw new Error('Offline')
+  })
+  assert.equal(await auth.replaceSession(previous, candidate, { encryptionSpace: 'public' }), true)
+  assert.equal(auth.getSavedSessionId(), candidate.testId)
+  assert.equal(auth.hasPendingSessionCleanup(), true)
+  const reloaded = await server.ssrLoadModule('/src/pubky.ts?permission-cleanup-reload')
+  assert.equal(await reloaded.restoreSavedSession(), candidate)
+  assert.equal(reloaded.hasPendingSessionCleanup(), true)
+  offline = false
+  await reloaded.retrySessionCleanup()
+  assert.equal(reloaded.hasPendingSessionCleanup(), false)
+  assert.equal(reloaded.getSavedSessionId(), candidate.testId)
 })

@@ -9,7 +9,7 @@ let recovery
 let data
 let html
 const owner = 'expected-account'
-const name = 'original-file.bin.pubkyenc'
+const name = 'original café 100%25.bin.pubkyenc'
 const path = `/priv/template/attachments/${name}`
 const recordId = 'expected-account:exact-grant'
 
@@ -89,7 +89,7 @@ test('saved browser keys recover binary contents locally without a session or ne
   })
   const recovered = await recovery.recoverEncryptedUpload(store, recordId, owner, file)
   assert.deepEqual(recovered.bytes, plaintext)
-  assert.equal(recovered.filename, 'original-file.bin')
+  assert.equal(recovered.filename, 'original café 100%25.bin')
   assert.deepEqual(calls.restored, [recordId], 'recover only the exact selected saved record')
   assert.deepEqual(calls.derived, [path], 'derive only the original private file path')
   assert.equal(calls.freed, 1)
@@ -107,7 +107,7 @@ test('public ciphertext recovers locally using its original public path', async 
     'public',
   )
   assert.deepEqual(recovered.bytes, plaintext)
-  assert.equal(recovered.filename, 'original-file.bin')
+  assert.equal(recovered.filename, 'original café 100%25.bin')
   assert.deepEqual(calls.derived, [`/pub/template/attachments/${name}`])
   assert.equal(calls.freed, 1)
   await assert.rejects(

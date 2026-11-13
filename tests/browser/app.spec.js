@@ -1045,7 +1045,7 @@ for (const space of ['public', 'private']) {
 }
 
 for (const space of ['public', 'private']) {
-  test(`declining ${space} encryption retains the upload and allows an explicit unencrypted upload`, async ({
+  test(`missing ${space} encryption keys retains the upload and allows an explicit unencrypted upload`, async ({
     page,
   }) => {
     await openApp(page)
@@ -1064,8 +1064,8 @@ for (const space of ['public', 'private']) {
       buffer: Buffer.from('private'),
     })
     await page.getByLabel('Encrypt this upload').check()
-    await submit(page).click()
-    await expect(page.locator('#status')).toContainText('No encryption keys were approved')
+    await expect(submit(page)).toBeDisabled()
+    await expect(page.locator('#authorize-encryption')).toBeVisible()
     expect(await calls(page, 'putBytes')).toHaveLength(0)
     expect(await calls(page, 'putBlob')).toHaveLength(0)
     expect(await input.evaluate((input) => input.files.length)).toBe(1)

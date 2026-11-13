@@ -13,6 +13,8 @@ const state = (globalThis.__pubkyTest = {
   failures: globalThis.__pubkySeed?.failures ?? {},
   persistentFailures: globalThis.__pubkySeed?.persistentFailures ?? {},
   calls: [],
+  authRequests: [],
+  authResumptions: [],
   pendingLists: [],
   pendingSaves: [],
   events: [],
@@ -23,30 +25,33 @@ const state = (globalThis.__pubkyTest = {
 })
 
 // Disposable non-extractable test key; production builds never import this fixture.
-let contentKey
-function encryptionKeys() {
+const contentKeys = new Map()
+function encryptionKeys(scopes, owner = publicKey.z32()) {
   return {
-    scopes: ['/pub/template/attachments/', '/priv/template/attachments/'],
+    scopes: [...scopes],
     async deriveCryptoKeyForPath(path) {
-      if (!/^\/(pub|priv)\/template\/attachments\//.test(path))
+      if (!scopes.some((scope) => (scope.endsWith('/') ? path.startsWith(scope) : path === scope)))
         throw new Error('Outside test scope')
       if (state.holdDerivations) await new Promise((resolve) => (state.releaseDerivation = resolve))
-      if (!contentKey) {
-        const storageKey = 'test-sdk-content-key'
-        let saved = globalThis.sessionStorage.getItem(storageKey)
+      if (!contentKeys.has(owner)) {
+        const storageKey = `test-sdk-content-key:${owner}`
+        let saved = globalThis.localStorage.getItem(storageKey)
         if (!saved) {
           saved = JSON.stringify([...globalThis.crypto.getRandomValues(new Uint8Array(32))])
-          globalThis.sessionStorage.setItem(storageKey, saved)
+          globalThis.localStorage.setItem(storageKey, saved)
         }
-        contentKey = globalThis.crypto.subtle.importKey(
-          'raw',
-          new Uint8Array(JSON.parse(saved)),
-          { name: 'AES-GCM' },
-          false,
-          ['encrypt', 'decrypt'],
+        contentKeys.set(
+          owner,
+          globalThis.crypto.subtle.importKey(
+            'raw',
+            new Uint8Array(JSON.parse(saved)),
+            { name: 'AES-GCM' },
+            false,
+            ['encrypt', 'decrypt'],
+          ),
         )
       }
-      return contentKey
+      return contentKeys.get(owner)
     },
     free() {},
   }
@@ -177,6 +182,24 @@ const storage = {
 }
 
 const savedIds = () => JSON.parse(globalThis.localStorage.getItem('test-sdk-records') || '[]')
+const sessionKey = (id) => `test-sdk-session:${id}`
+const defaultCapabilities = [
+  '/pub/template/:rw',
+  '/priv/template/:rw',
+  '/pub/template/attachments/:e',
+  '/priv/template/attachments/:e',
+]
+const keyScopes = (capabilities) =>
+  capabilities.flatMap((capability) => {
+    const separator = capability.lastIndexOf(':')
+    return capability.slice(separator + 1).includes('e') ? [capability.slice(0, separator)] : []
+  })
+function sessionData(id) {
+  const saved = globalThis.localStorage.getItem(sessionKey(id))
+  if (saved) return JSON.parse(saved)
+  const capabilities = state.capabilities ?? defaultCapabilities
+  return { publicKey: publicKey.z32(), capabilities, encryptionScopes: keyScopes(capabilities) }
+}
 const pendingLogoutKey = (id) => `test-sdk-pending-logout:${id}`
 const recoveredLogoutKey = (id) => `test-sdk-recovered-logout:${id}`
 function sessionStateError(message) {
@@ -192,21 +215,45 @@ function removeRecord(id) {
   )
   globalThis.localStorage.removeItem(pendingLogoutKey(id))
   globalThis.localStorage.removeItem(recoveredLogoutKey(id))
+  globalThis.localStorage.removeItem(sessionKey(id))
   globalThis.dispatchEvent(
     new globalThis.CustomEvent('pubky-session-changed', { detail: { id, action: 'removed' } }),
   )
 }
-function sessionFor(id = accountId) {
+function sessionFor(id = accountId, data = sessionData(id)) {
+  const identity = PublicKey.from(data.publicKey)
   return {
     fixtureId: id,
+    fixtureData: data,
     free() {},
     info: {
-      publicKey,
-      capabilities: state.capabilities ?? ['/pub/template/:rw', '/priv/template/:rw'],
+      publicKey: identity,
+      capabilities: [...data.capabilities],
     },
     get grant() {
       return {
         free() {},
+        async account() {
+          call('grant.account', id)
+          if (!data.capabilities.some((capability) => /^\/:.*r/.test(capability))) {
+            const error = new Error('Account inspection requires root read access')
+            error.name = 'RequestError'
+            error.data = { reason: 'Http', statusCode: 403 }
+            throw error
+          }
+          return {
+            usedBytes: 4096,
+            createdAt: '2026-11-01T12:34:56.000000',
+            disabled: false,
+            quota: {
+              effective: { storageQuotaMb: 'unlimited', rateRead: '100mb/m', rateWrite: '50mb/m' },
+              overrides: { storageQuotaMb: 'unlimited' },
+            },
+            free() {
+              call('grant.account.free', id)
+            },
+          }
+        },
         async createCustomPop(data) {
           call('grant.createCustomPop')
           // The test route signs with disposable Node-held keys. Real SDK verification
@@ -222,7 +269,9 @@ function sessionFor(id = accountId) {
           return credentials
         },
         get encryptionKeys() {
-          return state.declineEncryption ? undefined : encryptionKeys()
+          return state.declineEncryption
+            ? undefined
+            : encryptionKeys(data.encryptionScopes, identity.z32())
         },
       }
     },
@@ -234,18 +283,44 @@ function sessionFor(id = accountId) {
     },
   }
 }
-const record = (id = accountId) => ({
+const record = (id = accountId, data = sessionData(id)) => ({
   id,
-  publicKey: publicKey.toString(),
+  publicKey: PublicKey.from(data.publicKey).toString(),
   clientId: 'template',
   free() {},
 })
-const authFlow = () => ({
+const authFlow = (request) => ({
   authorizationUrl: 'pubkyring://authorize?test=browser-fixture',
-  saveDelegated: () => 'browser-test-flow',
+  saveDelegated: () => JSON.stringify(request),
   awaitApproval: () =>
-    new Promise((resolve) => {
-      state.approveSignIn = (id) => resolve(sessionFor(id))
+    new Promise((resolve, reject) => {
+      state.approveSignIn = (id, approval = {}) => {
+        const capabilities = approval.capabilities ?? request.capabilities.split(',')
+        const signer = PublicKey.from(approval.publicKey ?? publicKey.z32())
+        const data = {
+          publicKey: signer.z32(),
+          capabilities,
+          encryptionScopes: approval.encryptionScopes ?? keyScopes(capabilities),
+        }
+        if (
+          request.expectedSigner &&
+          PublicKey.from(request.expectedSigner).z32() !== signer.z32()
+        ) {
+          const error = new Error('The approval did not match the expected identity')
+          error.name = 'AuthenticationError'
+          reject(error)
+          return
+        }
+        resolve(
+          sessionFor(
+            id ??
+              (request.expectedSigner
+                ? `browser-test:grant:${globalThis.crypto.randomUUID()}`
+                : accountId),
+            data,
+          ),
+        )
+      }
     }),
   free() {},
 })
@@ -254,11 +329,12 @@ const client = {
     async restoreEncryptionKeys(id) {
       call('sessions.restoreEncryptionKeys', id)
       if (!savedIds().includes(id)) throw sessionStateError('Saved encryption record missing')
-      return encryptionKeys()
+      const data = sessionData(id)
+      return encryptionKeys(data.encryptionScopes, data.publicKey)
     },
     async list() {
       call('sessions.list')
-      return savedIds().map(record)
+      return savedIds().map((id) => record(id))
     },
     async restore(id) {
       call('sessions.restore', id)
@@ -270,7 +346,9 @@ const client = {
           recovered ? 'Browser session was signed out.' : 'Browser session logout is pending.',
         )
       }
-      return sessionFor(id)
+      const data = sessionData(id)
+      globalThis.localStorage.setItem(sessionKey(id), JSON.stringify(data))
+      return sessionFor(id, data)
     },
     async remove(id) {
       call('sessions.remove', id)
@@ -280,21 +358,29 @@ const client = {
       call('sessions.save', session.fixtureId)
       if (state.holdSaves) await new Promise((resolve) => state.pendingSaves.push(resolve))
       globalThis.localStorage.setItem(
+        sessionKey(session.fixtureId),
+        JSON.stringify(session.fixtureData),
+      )
+      globalThis.localStorage.setItem(
         'test-sdk-records',
         JSON.stringify([...new Set([...savedIds(), session.fixtureId])]),
       )
-      return record(session.fixtureId)
+      return record(session.fixtureId, session.fixtureData)
     },
     async isAvailable() {
       return true
     },
   },
-  async startGrantAuthFlow() {
+  async startGrantAuthFlow(capabilities, kind, options) {
     call('startGrantAuthFlow')
-    return authFlow()
+    const request = { capabilities, ...options }
+    state.authRequests.push(request)
+    return authFlow(request)
   },
-  async resumeDelegatedGrantAuthFlow() {
-    return authFlow()
+  async resumeDelegatedGrantAuthFlow(saved) {
+    const request = JSON.parse(saved)
+    state.authResumptions.push(request)
+    return authFlow(request)
   },
   eventStreamForUser(key, cursor) {
     const subscription = { cursor, options: {}, canceled: false }

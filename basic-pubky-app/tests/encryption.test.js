@@ -126,12 +126,14 @@ test('malformed envelopes and paths outside the app upload folders are rejected'
     '/pub/template/attachments/',
     '/pub/template/attachments/../secret',
     '/pub/template/attachments/nested/file',
-    '/pub/template/attachments/%2e%2e',
+    '/pub/template/attachments/nested\\file',
+    '/pub/template/attachments/file\u0000',
     '/priv/other/attachments/file',
     '/priv/template/attachments/',
     '/priv/template/attachments/../secret',
     '/priv/template/attachments/nested/file',
-    '/priv/template/attachments/%2e%2e',
+    '/priv/template/attachments/nested\\file',
+    '/priv/template/attachments/file\u0085',
   ]) {
     await assert.rejects(
       encryption.encryptUpload(session, value, new Uint8Array()),
@@ -240,11 +242,11 @@ for (const space of ['public', 'private']) {
     const name = await data.uploadFileBytes(
       session,
       space,
-      new globalThis.File([bytes], 'photo.bin'),
+      new globalThis.File([bytes], 'photo café 100%25.bin'),
       () => true,
       true,
     )
-    assert.ok(name.endsWith('.pubkyenc'))
+    assert.ok(name.endsWith('-photo café 100%25.bin.pubkyenc'))
     const stored = files.get(data.uploadedFilePath(space, name))
     assert.notDeepEqual(stored, bytes)
     assert.deepEqual(await data.readUploadedFile(session, space, name), bytes)

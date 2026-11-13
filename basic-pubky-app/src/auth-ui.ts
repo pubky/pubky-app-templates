@@ -3,6 +3,7 @@ import { DEVELOPMENT_SIGNUP_HOMESERVER, SHOW_DEVELOPMENT_SIGNUP } from './config
 import { disabledAttr, escapeHtml } from './html'
 
 export interface RingSigninState {
+  heading?: string
   authorizationUrl?: string
   copied?: boolean
   expired?: boolean
@@ -81,7 +82,7 @@ export async function renderRingSigninQr(ringSignin: RingSigninState) {
   }
 }
 
-function ringPanelHtml(ringSignin: RingSigninState, busy?: string) {
+export function ringPanelHtml(ringSignin: RingSigninState, busy?: string) {
   return `<section id="ring-panel" class="panel">${ringPanelBody(ringSignin, busy)}</section>`
 }
 
@@ -92,7 +93,7 @@ function ringPanelBody(ringSignin: RingSigninState, busy?: string) {
 
   return `
     <div class="section-header">
-      <h2>Sign in with Pubky Ring</h2>
+      <h2>${escapeHtml(ringSignin.heading ?? 'Sign in with Pubky Ring')}</h2>
       <button id="refresh-ring-signin" type="button" ${disabledAttr(isBusy || Boolean(loading))}>
         ${expired ? 'New link' : 'Refresh'}
       </button>

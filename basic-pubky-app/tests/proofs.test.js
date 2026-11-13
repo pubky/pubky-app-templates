@@ -149,7 +149,10 @@ for (const data of [
   })
 }
 
-test('an old proof accepted by the stateless SDK is rejected by the application freshness window', () => {
+test('an old proof accepted by the stateless SDK is rejected by the application freshness window', (t) => {
+  // Keep the exact 60-second boundary stable across wall-clock second changes.
+  const now = Date.now()
+  t.mock.method(Date, 'now', () => now)
   const { credentials, expected } = fixture({ proofAge: 61 })
   assert.ok(verifyCustomGrantPop(credentials))
   assert.throws(

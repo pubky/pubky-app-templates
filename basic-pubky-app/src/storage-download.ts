@@ -4,7 +4,9 @@ export function downloadBytes(bytes: Uint8Array, filename: string) {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = filename.replace(/[^a-zA-Z0-9._-]/g, '_') || 'download'
+  const safeName = filename.replace(/[/\\\p{Cc}\p{Cs}]/gu, '_')
+  // Preserve the original ciphertext name: offline recovery derives its key from that path.
+  link.download = !safeName || safeName === '.' || safeName === '..' ? 'download' : safeName
   document.body.append(link)
   link.click()
   link.remove()

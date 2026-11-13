@@ -1,13 +1,16 @@
-import { AuthFlowKind, Keypair, PublicKey } from '@synonymdev/pubky'
-import type { GrantAuthFlow, Session } from '@synonymdev/pubky'
+import { AuthFlowKind, Keypair, PublicKey, validateCapabilities } from '@synonymdev/pubky'
+import type { Capabilities, GrantAuthFlow, Session } from '@synonymdev/pubky'
+import { encryptionScopes, hasAccountAccess, hasCapability, hasEncryptionAccess } from './access'
 import { pubky } from './client'
 export { pubky } from './client'
 import {
   APP_CAPABILITIES,
   APP_CLIENT_ID,
+  APP_PATHS,
   HTTP_RELAY,
   STORAGE_NAMESPACE,
   SHOW_DEVELOPMENT_SIGNUP,
+  type StorageSpace,
 } from './config'
 
 const SESSION_KEY = STORAGE_NAMESPACE
@@ -35,6 +38,23 @@ export interface SavedSessionChange {
   type: 'invalidated' | 'selected'
 }
 
+export interface PermissionRequest {
+  encryptionSpace?: StorageSpace
+  account?: boolean
+}
+
+export interface RingAuthOptions extends PermissionRequest {
+  fresh?: boolean
+  session?: Session
+}
+
+interface PendingAuthContext extends PermissionRequest {
+  purpose: 'signin' | 'permissions'
+  capabilities: string
+  sessionId?: string
+  expectedSigner?: string
+}
+
 export async function signupDevelopmentUser(homeserver: string) {
   if (!SHOW_DEVELOPMENT_SIGNUP) {
     throw new Error('Development identity creation is available only in development on testnet.')
@@ -52,9 +72,12 @@ export async function signupDevelopmentUser(homeserver: string) {
 }
 
 export async function startRingAuthFlow(
-  options: { fresh?: boolean } = {},
-  isCurrent: () => boolean = () => true,
+  options: RingAuthOptions = {},
+  stillCurrent: () => boolean = () => true,
 ): Promise<RingAuthFlow> {
+  const context = authContext(options)
+  const isCurrent = () =>
+    stillCurrent() && (!context.sessionId || getSavedSessionId() === context.sessionId)
   const available = await pubky.browserSessionStore.isAvailable()
   if (!isCurrent()) throw ringAuthCanceledError()
   if (!available) {
@@ -67,6 +90,12 @@ export async function startRingAuthFlow(
       const saved: unknown = JSON.parse(pending)
       if (!isRecord(saved) || typeof saved.state !== 'string')
         throw new Error('Invalid saved sign-in link')
+      if (!matchesAuthContext(saved.context, context)) {
+        // A first sign-in and an account-bound permission request must never
+        // resume one another, even when the tab still has a saved link.
+        clearPendingAuth(pending)
+        return startRingAuthFlow(options, stillCurrent)
+      }
       const flow =
         saved.mode === 'delegated'
           ? await pubky.resumeDelegatedGrantAuthFlow(saved.state)
@@ -95,20 +124,25 @@ export async function startRingAuthFlow(
     }
   }
 
-  const flow = await pubky.startGrantAuthFlow(APP_CAPABILITIES, AuthFlowKind.signin(), {
-    clientId: APP_CLIENT_ID,
-    relay: HTTP_RELAY,
-    approvalFormat: 'signedApprovalV1',
-  })
+  const flow = await pubky.startGrantAuthFlow(
+    context.capabilities as Capabilities,
+    AuthFlowKind.signin(),
+    {
+      clientId: APP_CLIENT_ID,
+      relay: HTTP_RELAY,
+      approvalFormat: 'signedApprovalV1',
+      ...(context.expectedSigner ? { expectedSigner: context.expectedSigner } : {}),
+    },
+  )
   let saved: string
   try {
     if (!isCurrent()) throw ringAuthCanceledError()
     try {
-      saved = JSON.stringify({ mode: 'delegated', state: flow.saveDelegated() })
+      saved = JSON.stringify({ mode: 'delegated', state: flow.saveDelegated(), context })
     } catch (error) {
       if (!isErrorNamed(error, 'ClientStateError') || !errorText(error).includes('not delegated'))
         throw error
-      saved = JSON.stringify({ mode: 'local', state: flow.saveLocal() })
+      saved = JSON.stringify({ mode: 'local', state: flow.saveLocal(), context })
     }
     // Contains a relay secret (and a PoP secret for the local fallback). Keep it
     // tab-scoped and never log it or copy it into permanent application storage.
@@ -118,6 +152,70 @@ export async function startRingAuthFlow(
     throw error
   }
   return awaitRingApproval(flow, saved)
+}
+
+function authContext(options: RingAuthOptions): PendingAuthContext {
+  const { session, encryptionSpace, account } = options
+  if (!session && (encryptionSpace || account))
+    throw new Error('Sign in before requesting additional permissions.')
+  if (!session) return { purpose: 'signin', capabilities: APP_CAPABILITIES }
+  const sessionId = getSessionId(session)
+  if (!sessionId || getSavedSessionId() !== sessionId) throw ringAuthCanceledError()
+  const additions = [...APP_CAPABILITIES.split(','), ...session.info.capabilities]
+  if (encryptionSpace) additions.push(`${APP_PATHS[encryptionSpace]}attachments/:e`)
+  if (account) additions.push('/:r')
+  const capabilities = validateCapabilities([...new Set(additions)].sort().join(','))
+  return {
+    purpose: 'permissions',
+    capabilities,
+    sessionId,
+    expectedSigner: session.info.publicKey.z32(),
+    ...(encryptionSpace ? { encryptionSpace } : {}),
+    ...(account ? { account: true } : {}),
+  }
+}
+
+function matchesAuthContext(saved: unknown, current: PendingAuthContext) {
+  // Older template versions stored only initial sign-in flows.
+  if (saved === undefined) return current.purpose === 'signin'
+  if (!isRecord(saved)) return false
+  return (
+    saved.purpose === current.purpose &&
+    saved.capabilities === current.capabilities &&
+    saved.sessionId === current.sessionId &&
+    saved.expectedSigner === current.expectedSigner &&
+    saved.encryptionSpace === current.encryptionSpace &&
+    saved.account === current.account
+  )
+}
+
+/** Resume only a permission flow bound to this exact saved account and grant. */
+export function getPendingPermissionAuth(session: Session): PermissionRequest | undefined {
+  const pending = sessionStorage.getItem(PENDING_AUTH_KEY)
+  if (!pending) return undefined
+  if (getSessionId(session) !== getSavedSessionId()) return undefined
+  try {
+    const saved: unknown = JSON.parse(pending)
+    if (!isRecord(saved) || !isRecord(saved.context) || saved.context.purpose !== 'permissions')
+      return undefined
+    const { encryptionSpace, account } = saved.context
+    if (
+      encryptionSpace !== undefined &&
+      encryptionSpace !== 'public' &&
+      encryptionSpace !== 'private'
+    )
+      return undefined
+    if (account !== undefined && account !== true) return undefined
+    const request: PermissionRequest = {
+      ...(encryptionSpace ? { encryptionSpace } : {}),
+      ...(account ? { account: true } : {}),
+    }
+    if (matchesAuthContext(saved.context, authContext({ session, ...request }))) return request
+    clearPendingAuth(pending)
+    return undefined
+  } catch {
+    return undefined
+  }
 }
 
 export function getSavedSessionId() {
@@ -134,8 +232,19 @@ export async function saveSession(
   isCurrent: () => boolean = () => true,
   beforeSelect?: () => Promise<unknown>,
 ) {
+  return persistAndSelectSession(session, isCurrent, beforeSelect)
+}
+
+async function persistAndSelectSession(
+  session: Session,
+  isCurrent: () => boolean,
+  beforeSelect?: () => Promise<unknown>,
+  replacedId?: string,
+) {
   const stored = await pubky.browserSessionStore.save(session)
   try {
+    if (replacedId === stored.id)
+      throw new Error('Authorize a new grant to change permissions. Your current session was kept.')
     sessionIds.set(session, stored.id)
     const cleanupKey = `${PENDING_REVOCATION_PREFIX}${stored.id}`
     await withSessionSelection(async () => {
@@ -156,6 +265,10 @@ export async function saveSession(
           const restored = await pubky.browserSessionStore.restore(stored.id)
           restored.free()
           if (isCurrent()) {
+            // Save the revocation intent before switching the selected record.
+            // A lost tab must not leave the old grant silently authorized.
+            if (replacedId && replacedId !== stored.id)
+              localStorage.setItem(`${PENDING_REVOCATION_PREFIX}${replacedId}`, 'replaced')
             localStorage.setItem(SESSION_KEY, stored.id)
             localStorage.removeItem(cleanupKey)
             selected = true
@@ -168,6 +281,76 @@ export async function saveSession(
     })
   } finally {
     stored.free()
+  }
+}
+
+/** Replace a grant only after the signer approved this account and all needed access. */
+export async function replaceSession(
+  previous: Session,
+  candidate: Session,
+  requirement: PermissionRequest = {},
+  isCurrent: () => boolean = () => true,
+  beforeSelect?: () => Promise<unknown>,
+) {
+  const previousId = getSessionId(previous)
+  if (!previousId) {
+    await discardSession(candidate)
+    throw new Error('The previous session must be saved before changing permissions.')
+  }
+  try {
+    validateReplacement(previous, candidate, requirement)
+  } catch (error) {
+    await discardSession(candidate)
+    throw error
+  }
+  const selected = await persistAndSelectSession(
+    candidate,
+    () => getSavedSessionId() === previousId && isCurrent(),
+    beforeSelect,
+    previousId,
+  )
+  if (selected) {
+    // A cleanup failure does not undo a successful authorization. The durable
+    // marker survives reload, and the UI can offer an explicit cleanup retry.
+    await retrySessionCleanup().catch(() => undefined)
+  }
+  return selected
+}
+
+function validateReplacement(previous: Session, candidate: Session, request: PermissionRequest) {
+  if (candidate.info.publicKey.z32() !== previous.info.publicKey.z32())
+    throw new Error('Pubky Ring approved a different account. Your current session was kept.')
+  for (const capability of previous.info.capabilities) {
+    const separator = capability.lastIndexOf(':')
+    if (
+      separator < 1 ||
+      !hasCapability(candidate, capability.slice(0, separator), capability.slice(separator + 1))
+    ) {
+      throw new Error('The approval omitted existing permissions. Your current session was kept.')
+    }
+  }
+  const scopes = encryptionScopes(candidate)
+  const retainedKeys = encryptionScopes(previous).every((path) =>
+    scopes.some((scope) => scope === path || (scope.endsWith('/') && path.startsWith(scope))),
+  )
+  if (!retainedKeys)
+    throw new Error('The approval omitted existing encryption keys. Your current session was kept.')
+  if (request.encryptionSpace && !hasEncryptionAccess(candidate, request.encryptionSpace))
+    throw new Error('Encryption access was not approved. Your current session was kept.')
+  if (
+    request.encryptionSpace &&
+    !hasCapability(candidate, APP_PATHS[request.encryptionSpace], 'rw')
+  )
+    throw new Error(
+      'Storage access for the upload folder was not approved. Your current session was kept.',
+    )
+  if (request.account && !hasAccountAccess(candidate))
+    throw new Error('Account read access was not approved. Your current session was kept.')
+  if (!request.encryptionSpace && !request.account) {
+    for (const path of Object.values(APP_PATHS)) {
+      if (!hasCapability(candidate, path, 'rw'))
+        throw new Error('Storage access was not fully approved. Your current session was kept.')
+    }
   }
 }
 
@@ -197,21 +380,21 @@ export function hasPendingSessionCleanup() {
 }
 
 export async function restoreSavedSession() {
-  if (hasPendingSessionCleanup())
-    await withSessionSelection(async () => {
-      for (const id of pendingRevocationIds()) {
-        if (id !== getSavedSessionId()) {
-          try {
-            // Restore retries a pending SDK logout, or returns a grant still needing revocation.
-            const session = await pubky.browserSessionStore.restore(id)
-            await session.signout()
-          } catch (error) {
-            if (!isInvalidSavedSessionError(error)) throw error
-          }
-        }
-        localStorage.removeItem(`${PENDING_REVOCATION_PREFIX}${id}`)
-      }
-    })
+  if (hasPendingSessionCleanup()) {
+    try {
+      await retrySessionCleanup()
+    } catch (error) {
+      // Replaced grants must not prevent use of an already selected new grant.
+      // Abandoned approvals retain the existing explicit recovery behavior.
+      if (
+        !getSavedSessionId() ||
+        pendingRevocationIds().some(
+          (id) => localStorage.getItem(`${PENDING_REVOCATION_PREFIX}${id}`) !== 'replaced',
+        )
+      )
+        throw error
+    }
+  }
   const savedId = getSavedSessionId()
   if (!savedId) return undefined
   try {
@@ -226,6 +409,26 @@ export async function restoreSavedSession() {
     }
     throw error
   }
+}
+
+export async function retrySessionCleanup() {
+  await withSessionSelection(async () => {
+    for (const id of pendingRevocationIds()) {
+      if (id !== getSavedSessionId()) {
+        let session: Session | undefined
+        try {
+          // Restore retries a pending SDK logout, or returns a grant still needing revocation.
+          session = await pubky.browserSessionStore.restore(id)
+          await session.signout()
+        } catch (error) {
+          if (!isInvalidSavedSessionError(error)) throw error
+        } finally {
+          session?.free?.()
+        }
+      }
+      localStorage.removeItem(`${PENDING_REVOCATION_PREFIX}${id}`)
+    }
+  })
 }
 
 async function withSessionSelection<T>(task: () => Promise<T>) {

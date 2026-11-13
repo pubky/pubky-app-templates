@@ -2,6 +2,7 @@ import { PubkyResource } from '@synonymdev/pubky'
 import type { Address, Path, PublicStorage, ResourceStats, Session } from '@synonymdev/pubky'
 import { requireStorageAccess } from './access'
 import { APP_PATHS, type StorageSpace } from './config'
+import { filenameForUpload, isUploadFilename } from './upload-filename'
 import {
   decryptUpload,
   encryptUpload,
@@ -21,7 +22,7 @@ export interface UploadedFile {
 
 // This template keeps uploads in its existing attachments/ folder; Pubky treats it as a normal path.
 export function uploadedFilePath(space: StorageSpace, name: string): Path {
-  if (!isUploadedFileName(name)) {
+  if (!isUploadFilename(name)) {
     throw new Error('Invalid uploaded filename.')
   }
   return `${APP_PATHS[space]}attachments/${name}`
@@ -42,17 +43,23 @@ export async function listUploadedFiles(
       const urls = await session.storage.list(directory, cursor, false, PAGE_SIZE, true)
       for (const url of urls) {
         const resource = PubkyResource.parse(url)
-        const name = resource.path.slice(directory.length)
-        if (
-          resource.owner.z32() !== session.info.publicKey.z32() ||
-          !resource.path.startsWith(directory) ||
-          name.replace(/\/$/, '').includes('/')
-        ) {
-          throw new Error('The homeserver returned a file outside the selected folder.')
+        const owner = resource.owner
+        try {
+          const name = resource.path.slice(directory.length)
+          if (
+            owner.z32() !== session.info.publicKey.z32() ||
+            !resource.path.startsWith(directory) ||
+            name.replace(/\/$/, '').includes('/')
+          ) {
+            throw new Error('The homeserver returned a file outside the selected folder.')
+          }
+          // Shallow listings include child directories; this example only displays files.
+          if (name.endsWith('/')) continue
+          if (isUploadFilename(name)) names.push(name)
+        } finally {
+          owner.free()
+          resource.free()
         }
-        // Shallow listings include child directories; this example only displays files.
-        if (name.endsWith('/')) continue
-        if (isUploadedFileName(name)) names.push(name)
       }
       const next = urls.at(-1)
       if (!next || next === cursor || urls.length < PAGE_SIZE) break
@@ -79,7 +86,7 @@ export async function uploadFileBytes(
 ) {
   requireStorageAccess(session, space)
   checkByteLength(file.size + (encrypt ? ENCRYPTION_OVERHEAD_BYTES : 0))
-  const filename = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100) || 'file'
+  const filename = filenameForUpload(file.name || 'file')
   const suffix = encrypt
     ? ENCRYPTED_FILE_SUFFIX
     : filename.endsWith(ENCRYPTED_FILE_SUFFIX)
@@ -141,29 +148,29 @@ export function publicUploadedFileAddress(session: Session, name: string) {
 /** Only canonical Pubky public resources are accepted, never arbitrary HTTP URLs. */
 export function parsePublicAddress(input: string): { address: Address; filename: string } {
   const value = input.trim()
-  if (
-    !value.startsWith('pubky') ||
-    /[?#\s]/.test(value) ||
-    [...value].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
-  ) {
+  if (!value.startsWith('pubky') || /[\\\p{Cc}\p{Cs}]/u.test(value)) {
     throw new Error('Enter a public Pubky file address, such as pubky://<key>/pub/app/file.json.')
   }
   const resource = PubkyResource.parse(value)
-  const path = resource.path
-  if (
-    !path.startsWith('/pub/') ||
-    path.endsWith('/') ||
-    path
-      .split('/')
-      .slice(1)
-      .some((segment) => !segment || segment === '.' || segment === '..')
-  ) {
-    throw new Error('The public reader accepts files under /pub/ only.')
-  }
-  return {
-    // The parsed path is already encoded; rebuilding an address would encode it twice.
-    address: value as Address,
-    filename: path.split('/').at(-1) || 'download',
+  try {
+    const path = resource.path
+    if (
+      !path.startsWith('/pub/') ||
+      path.endsWith('/') ||
+      path
+        .split('/')
+        .slice(1)
+        .some((segment) => !segment || segment === '.' || segment === '..')
+    ) {
+      throw new Error('The public reader accepts files under /pub/ only.')
+    }
+    return {
+      // SDK addresses and paths contain plain names; the SDK encodes only HTTP requests.
+      address: value as Address,
+      filename: path.split('/').at(-1) || 'download',
+    }
+  } finally {
+    resource.free()
   }
 }
 
@@ -217,10 +224,6 @@ export async function readLimitedResponse(
     offset += chunk.byteLength
   }
   return bytes
-}
-
-function isUploadedFileName(name: string) {
-  return /^[a-zA-Z0-9_-][a-zA-Z0-9._-]{0,179}$/.test(name)
 }
 
 function requireCurrent(isCurrent: () => boolean) {
