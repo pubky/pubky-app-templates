@@ -201,6 +201,40 @@ test('a pending permission request resumes for the same identity after reload', 
   expect(await selectedId(page)).toBe('resumed-encryption')
 })
 
+test('sign-out cancels a pending permission approval even while remote revocation is delayed', async ({
+  page,
+}) => {
+  await openApp(page)
+  await selectEncryptedUpload(page)
+  await beginEncryptionAuthorization(page)
+  await page.evaluate((id) => {
+    globalThis.__latePermissionApproval = globalThis.__pubkyTest.approveSignIn
+    globalThis.__pubkyTest.holdSignoutId = id
+  }, initialId)
+  await page.locator('#sign-out').click()
+  await expect
+    .poll(() => page.evaluate(() => typeof globalThis.__pubkyTest.releaseSignout))
+    .toBe('function')
+  await page.evaluate(() => globalThis.__latePermissionApproval('late-permission-grant'))
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        globalThis.__pubkyTest.calls.some(
+          (call) => call.method === 'signout' && call.path === 'late-permission-grant',
+        ),
+      ),
+    )
+    .toBe(true)
+  expect(await selectedId(page)).toBe(initialId)
+  await expect(page.locator('#file-form')).toHaveCount(0)
+  await page.evaluate(() => globalThis.__pubkyTest.releaseSignout())
+  await expect(page.locator('#authorize-ring')).toBeVisible()
+  expect(await selectedId(page)).toBeNull()
+  expect(
+    await page.evaluate(() => JSON.parse(globalThis.localStorage.getItem('test-sdk-records'))),
+  ).toEqual([])
+})
+
 test('account inspection requests root read explicitly and loads the granted account on demand', async ({
   page,
 }) => {

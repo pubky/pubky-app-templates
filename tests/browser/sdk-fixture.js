@@ -279,6 +279,8 @@ function sessionFor(id = accountId, data = sessionData(id)) {
     async signout() {
       globalThis.localStorage.setItem(pendingLogoutKey(id), 'true')
       call('signout', id)
+      if (state.holdSignoutId === id)
+        await new Promise((resolve) => (state.releaseSignout = resolve))
       removeRecord(id)
     },
   }

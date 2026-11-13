@@ -676,7 +676,10 @@ async function handleRingApproval(
               session,
               request ?? {},
               () =>
-                state.session === previous && state.revision === revision && attempt.isCurrent(),
+                !state.logoutPending &&
+                state.session === previous &&
+                state.revision === revision &&
+                attempt.isCurrent(),
               attempt.waitUntilVisible,
             )
           } else
@@ -877,6 +880,8 @@ async function handleSignOut() {
   const session = state.session
   if (!session) return
   state.logoutPending = true
+  // A late permission approval must never replace a session being signed out.
+  cancelRingSignin()
   state.files = []
   state.uploads = []
   state.drafts = {}
