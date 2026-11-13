@@ -11,11 +11,13 @@ export async function recoverEncryptedUpload(
   file: File,
   isCurrent: () => boolean = () => true,
   space: StorageSpace = 'private',
+  originalStoredFilename = file.name,
 ) {
-  if (!isEncryptedUpload(space, file.name)) {
-    throw new Error('Choose a ciphertext download with its original .pubkyenc filename.')
+  if (!isEncryptedUpload(space, originalStoredFilename)) {
+    throw new Error('Enter the original .pubkyenc filename shown in the Files list.')
   }
-  const path = uploadedFilePath(space, file.name)
+  // The browser may rename a download; derive only from its original stored name.
+  const path = uploadedFilePath(space, originalStoredFilename)
   if (file.size > MAX_FILE_BYTES) throw new Error('This template handles files up to 5 MiB.')
   const bytes = new Uint8Array(await file.arrayBuffer())
   if (!isCurrent()) throw new Error('The active session changed.')
@@ -27,7 +29,7 @@ export async function recoverEncryptedUpload(
     if (!isCurrent()) throw new Error('The active session changed.')
     return {
       bytes: await decryptWithKeys(keys, path, bytes, expectedOwner, isCurrent),
-      filename: downloadedUploadName(space, file.name),
+      filename: downloadedUploadName(space, originalStoredFilename),
     }
   } finally {
     keys.free()

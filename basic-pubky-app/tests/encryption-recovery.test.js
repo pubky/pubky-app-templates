@@ -117,6 +117,85 @@ test('public ciphertext recovers locally using its original public path', async 
   assert.equal(calls.freed, 2)
 })
 
+test('a browser-renamed ciphertext recovers offline with its exact original stored filename', async (t) => {
+  const { encrypted, store, calls, plaintext } = await fixture()
+  const renamed = new globalThis.File([encrypted], name.replaceAll('%', '_'))
+  const network = t.mock.method(globalThis, 'fetch', () => {
+    throw new Error('Offline recovery must not use the network')
+  })
+  const recovered = await recovery.recoverEncryptedUpload(
+    store,
+    recordId,
+    owner,
+    renamed,
+    () => true,
+    'private',
+    name,
+  )
+  assert.deepEqual(recovered.bytes, plaintext)
+  assert.equal(recovered.filename, 'original café 100%25.bin')
+  assert.deepEqual(calls.restored, [recordId])
+  assert.deepEqual(calls.derived, [path])
+  assert.equal(calls.freed, 1)
+  assert.equal(network.mock.callCount(), 0)
+})
+
+test('a wrong explicit original filename still fails authenticated decryption', async () => {
+  const { encrypted, store, calls } = await fixture()
+  await assert.rejects(
+    recovery.recoverEncryptedUpload(
+      store,
+      recordId,
+      owner,
+      new globalThis.File([encrypted], 'browser-renamed.pubkyenc'),
+      () => true,
+      'private',
+      'wrong-original.pubkyenc',
+    ),
+    /Could not decrypt/,
+  )
+  assert.deepEqual(calls.derived, ['/priv/template/attachments/wrong-original.pubkyenc'])
+  assert.equal(calls.freed, 1)
+})
+
+test('invalid explicit original filenames fail before reading ciphertext or restoring keys', async () => {
+  const { store, calls } = await fixture()
+  let reads = 0
+  const file = {
+    name: 'browser-renamed.pubkyenc',
+    size: 10,
+    async arrayBuffer() {
+      reads++
+      throw new Error('An invalid original filename must not read ciphertext')
+    },
+  }
+  for (const original of [
+    '',
+    'plain.txt',
+    '../private.pubkyenc',
+    'nested/file.pubkyenc',
+    'nested\\file.pubkyenc',
+    'control\u0000.pubkyenc',
+    'control\u0085.pubkyenc',
+    '.'.repeat(181) + '.pubkyenc',
+  ]) {
+    await assert.rejects(
+      recovery.recoverEncryptedUpload(
+        store,
+        recordId,
+        owner,
+        file,
+        () => true,
+        'private',
+        original,
+      ),
+      /original .pubkyenc filename|Invalid uploaded filename/,
+    )
+  }
+  assert.equal(reads, 0)
+  assert.deepEqual(calls.restored, [])
+})
+
 test('recovery authenticates the original filename, account, and ciphertext', async () => {
   const { file, store, encrypted, calls } = await fixture()
   await assert.rejects(

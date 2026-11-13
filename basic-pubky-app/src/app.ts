@@ -1,7 +1,7 @@
 import type { Session } from '@synonymdev/pubky'
 import { version as pubkySdkVersion } from '@synonymdev/pubky/package.json'
 import { hasEncryptionAccess, hasStorageAccess, requireStorageAccess } from './access'
-import { type StorageSpace } from './config'
+import { APP_PATHS, type StorageSpace } from './config'
 import { pageNavigationHtml } from './navigation'
 import {
   isAuthorizeRingLink,
@@ -284,7 +284,7 @@ function permissionPanelHtml() {
         <ul>${session.info.capabilities.map((capability) => `<li><code>${escapeHtml(capability)}</code></li>`).join('') || '<li>No capabilities approved.</li>'}</ul>
       </details>
       <button id="authorize-storage-permissions" type="button">Authorize storage access again</button>
-      ${hasPendingSessionCleanup() ? '<p>Previous grant cleanup is pending. Your current authorization is active.</p><button id="retry-permission-cleanup" type="button">Retry previous grant cleanup</button>' : ''}
+      <div id="previous-grant-cleanup">${hasPendingSessionCleanup() ? '<p>Previous grant cleanup is pending. Your current authorization is active.</p><button id="retry-permission-cleanup" type="button">Retry previous grant cleanup</button>' : ''}</div>
     </section>
     <div id="permission-auth-slot">${permissionAuthHtml()}</div>
   `
@@ -293,6 +293,8 @@ function permissionPanelHtml() {
 function permissionAuthHtml() {
   if (!state.permissionRequest) return ''
   return `${ringPanelHtml(state.ringSignin, state.busy)}
+    ${state.permissionRequest.encryptionSpace ? `<p>Requesting encryption keys for <code>${escapeHtml(APP_PATHS[state.permissionRequest.encryptionSpace])}attachments/</code>.</p>` : ''}
+    ${state.permissionRequest.account ? '<p>This request adds read access to /, including every public and private folder on this account.</p>' : ''}
     <p>The current account stays active until the requested permissions are approved. Canceling keeps your existing access.</p>
     <button id="cancel-permission-auth" type="button">Cancel authorization</button>`
 }
@@ -323,6 +325,7 @@ function renderWorkspace() {
   if (view) view.innerHTML = signedInViewHtml()
   syncControls()
   mountSessionTools()
+  void renderRingSigninQr(state.ringSignin)
 }
 
 function disposeSessionTools() {
@@ -513,6 +516,7 @@ function handleClick(event: MouseEvent) {
     case 'retry-permission-cleanup':
       void run('Retrying previous grant cleanup...', async () => {
         await retrySessionCleanup()
+        app.querySelector('#previous-grant-cleanup')?.replaceChildren()
         setNotice('Previous grant cleanup completed.')
       })
       break

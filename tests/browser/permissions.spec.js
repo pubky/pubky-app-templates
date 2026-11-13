@@ -106,23 +106,29 @@ test('same-account encryption approval retains the selected file and supports sp
   await expect(page.locator('#status')).toContainText('File uploaded:')
   const row = page.locator('#files-list li').filter({ hasText: 'café 100%.txt.pubkyenc' })
   await expect(row).toBeVisible()
+  const originalStoredName = await row.locator('strong').innerText()
   const downloadEvent = page.waitForEvent('download')
   await row.getByRole('button', { name: 'Download ciphertext', exact: true }).click()
   const download = await downloadEvent
-  expect(download.suggestedFilename()).toContain('café 100%.txt.pubkyenc')
+  expect(download.suggestedFilename()).toMatch(/café 100.*\.txt\.pubkyenc$/)
   const encrypted = await downloadedBytes(download)
   await page.getByRole('link', { name: 'Tools', exact: true }).click()
   await expect(page.locator('#encryption-recovery')).toBeVisible()
   await page.getByLabel('Original storage').selectOption('public')
-  await page.locator('#encryption-recovery input').setInputFiles({
+  await page.locator('#encryption-recovery input[type="file"]').setInputFiles({
     name: download.suggestedFilename(),
     mimeType: 'application/octet-stream',
     buffer: encrypted,
   })
+  await expect(page.getByLabel('Original stored filename')).toHaveValue(
+    download.suggestedFilename(),
+  )
+  // Browsers can rename downloads; derive from the exact name stored on the Homeserver.
+  await page.getByLabel('Original stored filename').fill(originalStoredName)
   const recoveryEvent = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Decrypt with saved keys', exact: true }).click()
   const recovery = await recoveryEvent
-  expect(recovery.suggestedFilename()).toContain('café 100%.txt')
+  expect(recovery.suggestedFilename()).toMatch(/café 100.*\.txt$/)
   expect((await downloadedBytes(recovery)).toString()).toBe(
     'A file encrypted after permission approval',
   )
@@ -156,6 +162,56 @@ test('canceling permission authorization keeps the old session and ordinary uplo
       globalThis.__pubkyTest.calls.filter((call) => call.method === 'putBytes'),
     ),
   ).toHaveLength(0)
+})
+
+test('pending encryption authorization keeps its folder and QR code when switching storage views', async ({
+  page,
+}) => {
+  await openApp(page)
+  await selectEncryptedUpload(page)
+  await beginEncryptionAuthorization(page)
+  const link = await page.locator('#authorize-ring').getAttribute('href')
+  await page.getByRole('button', { name: 'Private storage', exact: true }).click()
+  await expect(page.locator('#permission-auth-slot')).toContainText('/pub/template/attachments/')
+  await expect(page.locator('#authorize-ring')).toHaveAttribute('href', link)
+  await expect
+    .poll(() =>
+      page
+        .locator('#ring-signin-qr')
+        .evaluate((canvas) =>
+          [...canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data].some(
+            (value) => value !== 0,
+          ),
+        ),
+    )
+    .toBe(true)
+  const [request] = await requests(page)
+  expect(request.capabilities).toContain('/pub/template/attachments/:e')
+  expect(request.capabilities).not.toContain('/priv/template/attachments/:e')
+})
+
+test('retrying previous grant cleanup keeps the new session and selected upload', async ({
+  page,
+}) => {
+  await openApp(page)
+  await selectEncryptedUpload(page)
+  await beginEncryptionAuthorization(page)
+  await page.evaluate((id) => {
+    globalThis.__pubkyTest.failures[`signout:${id}`] = 'Temporary revocation failure'
+  }, initialId)
+  await approve(page, 'new-grant-pending-cleanup')
+  await expect(page.locator('#status')).toContainText('Permissions updated.')
+  await expect(page.locator('#previous-grant-cleanup')).toContainText('cleanup is pending')
+  await page.evaluate((id) => {
+    globalThis.localStorage.setItem(`test-sdk-recovered-logout:${id}`, 'true')
+  }, initialId)
+  await page.locator('#retry-permission-cleanup').click()
+  await expect(page.locator('#previous-grant-cleanup')).toBeEmpty()
+  expect(await selectedId(page)).toBe('new-grant-pending-cleanup')
+  expect(
+    await page.locator('#file-form input[type="file"]').evaluate((input) => input.files[0].name),
+  ).toBe('café 100%.txt')
+  await expect(page.locator('#file-form button[type="submit"]')).toBeEnabled()
 })
 
 test('declining encryption keys preserves the previous grant and never uploads plaintext implicitly', async ({

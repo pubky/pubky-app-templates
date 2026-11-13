@@ -1027,7 +1027,7 @@ for (const space of ['public', 'private']) {
     await expect(page.locator('#encryption-recovery')).toBeVisible()
     await page.getByLabel('Original storage').selectOption(space)
     const before = await page.evaluate(() => globalThis.__pubkyTest.calls.length)
-    await page.locator('#encryption-recovery input').setInputFiles({
+    await page.locator('#encryption-recovery input[type="file"]').setInputFiles({
       name: ciphertext.suggestedFilename(),
       mimeType: 'application/octet-stream',
       buffer: raw,
