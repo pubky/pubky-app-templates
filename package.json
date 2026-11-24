@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "start:prod": "node server.js",
     "audit": "npm audit --audit-level=moderate",
     "check": "npm run format:check && npm run lint",
     "format": "prettier \"**/*.{js,ts,json,yml,yaml,md,html}\" --write",
@@ -11,7 +12,8 @@
     "lint": "npm run lint:code && npm run lint:actions",
     "lint:actions": "github-actionlint .github/workflows/*.yml",
     "lint:code": "eslint .",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "test:deployment": "node --test tests/deployment.test.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -27,5 +29,8 @@
       "adm-zip": "0.6.1"
     },
     "minimatch": "^11.0.8"
+  },
+  "dependencies": {
+    "sirv": "3.0.2"
   }
 }

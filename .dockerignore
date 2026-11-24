@@ -1,0 +1,12 @@
+.git
+.github
+.agents
+**/node_modules
+**/dist
+**/dist-ssr
+playwright-report
+test-results
+**/.env*
+**/*.local
+*.log
+gha-creds-*.json
