@@ -40,6 +40,9 @@ jobs:
       - name: Check
         run: npm run check
 
+      - name: Test production server routing
+        run: npm run test:deployment
+
   build:
     name: Build ${{ matrix.template }}
     needs: check

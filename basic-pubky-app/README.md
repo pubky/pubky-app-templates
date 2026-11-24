@@ -50,9 +50,9 @@ For complete local Homeserver, testnet, and authentication setup, follow the [Pu
 
 Signed approvals and encryption keys require a compatible signer and Homeserver. Local testnet relays default to a 2 KiB approval body limit, which can reject a signed approval with HTTP 413 while the app continues waiting. Run a relay with a larger limit, such as `http-relay --max-body-size 16384`, and point `VITE_PUBKY_HTTP_RELAY` to its inbox URL. The app cannot change a remote relay’s limit. See the [SDK relay guidance](https://github.com/pubky/pubky-homeserver/blob/v0.18.0/docs/scoped-encryption-keys.md#relay-limits).
 
-The hosted GitHub Pages builds are available for
-[mainnet](https://pubky.github.io/pubky-app-templates/mainnet/basic-pubky-app/) and a
-[local testnet](https://pubky.github.io/pubky-app-templates/testnet/basic-pubky-app/). Both are
+The hosted builds are available for
+[mainnet](https://templates.pubky.org/mainnet/basic-pubky-app/) and a
+[local testnet](https://templates.pubky.org/testnet/basic-pubky-app/). Both are
 production builds and expose only Pubky Ring sign-in.
 
 ## Browser Sessions

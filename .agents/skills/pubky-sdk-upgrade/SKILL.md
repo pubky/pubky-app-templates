@@ -62,7 +62,7 @@ Read the current CI scripts and run the checks they require. At creation, this r
 
 - Root: `npm ci`, `npm run audit`, and `npm run check`.
 - Each template: `npm ci`, `npm run audit`, `npm test --if-present`, and `npm run build`.
-- Basic app deployment variants: production mainnet and testnet builds as configured in `.github/workflows/pages.yml`; verify both retain the production authentication restrictions.
+- Basic app deployment variants: production mainnet and testnet builds as configured in `Dockerfile`; verify both retain the production authentication restrictions.
 
 Add focused behavior tests when new features or migration changes warrant them, especially for capability/path boundaries, session lifecycle, asynchronous cleanup, and errors. A successful TypeScript build alone is insufficient evidence for those behaviors. Check that copied templates can still install and build independently of repository-only tooling.
 
